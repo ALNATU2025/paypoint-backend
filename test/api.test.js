@@ -14,6 +14,7 @@ const SMARTCARD_OK = '1212121212';
 const SMARTCARD_FAIL = '1111111111';
 const SMARTCARD_PENDING = '2222222222';
 const SMARTCARD_INVALID = '9999999999';
+const SMARTCARD_WRONG_STARTIMES = '8888888888';
 const PAYSTACK_SECRET = 'sk_test_fake';
 
 const fake = { pays: [], requeryResult: 'delivered', paystack: {} };
@@ -59,6 +60,21 @@ const fakeServer = http.createServer(async (req, res) => {
     if (path === '/merchant-verify') {
       if (body.billersCode === SMARTCARD_INVALID) {
         return send({ code: '000', content: { error: 'This is not a valid smartcard number' } });
+      }
+      if (body.serviceID === 'startimes') {
+        // StarTimes shape: Balance + WrongBillersCode, no bouquet info.
+        return send({
+          code: '000',
+          content: {
+            Customer_Name: body.billersCode === SMARTCARD_WRONG_STARTIMES ? '' : 'TestMan Decoder',
+            Balance: 54.82,
+            Smartcard_Number: body.billersCode,
+            WrongBillersCode: body.billersCode === SMARTCARD_WRONG_STARTIMES,
+          },
+        });
+      }
+      if (body.serviceID === 'gotv') {
+        return send({ code: '000', content: { Customer_Name: 'GOTV CUSTOMER', Status: 'ACTIVE', Due_Date: '02-FEB-25' } });
       }
       return send({
         code: '000',
@@ -246,9 +262,22 @@ test('verify smartcard', async () => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.data.customerName, 'TEST CUSTOMER');
   assert.equal(r.body.data.renewalAmount, 19000);
+  assert.equal(r.body.data.dueDate, '2026-11-30');
   r = await api('POST', '/api/cable/verify', { token, body: { serviceID: 'dstv', billersCode: SMARTCARD_INVALID } });
   assert.equal(r.status, 422);
   assert.match(r.body.message, /not a valid/);
+
+  // GOtv returns dates like 02-FEB-25
+  r = await api('POST', '/api/cable/verify', { token, body: { serviceID: 'gotv', billersCode: SMARTCARD_OK } });
+  assert.equal(r.body.data.dueDate, '2025-02-02');
+
+  // StarTimes flags bad numbers with WrongBillersCode
+  r = await api('POST', '/api/cable/verify', { token, body: { serviceID: 'startimes', billersCode: SMARTCARD_OK } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.customerName, 'TestMan Decoder');
+  assert.equal(r.body.data.balance, 54.82);
+  r = await api('POST', '/api/cable/verify', { token, body: { serviceID: 'startimes', billersCode: SMARTCARD_WRONG_STARTIMES } });
+  assert.equal(r.status, 422);
 });
 
 test('pay requires a PIN to be set', async () => {
@@ -292,6 +321,8 @@ test('successful payment debits the wallet with the VTPass price', async () => {
   const sent = fake.pays.at(-1);
   assert.equal(sent.subscription_type, 'change');
   assert.equal(sent.quantity, 2);
+  assert.equal(sent.variation_code, 'dstv-compact');
+  assert.equal(sent.amount, undefined, 'change must not send amount (VTPass would top up that exact amount)');
   assert.equal(sent.phone, PHONE);
 });
 
@@ -303,6 +334,8 @@ test('StarTimes ignores months and sends no subscription_type', async () => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.data.transaction.amount, 5300);
   assert.equal(fake.pays.at(-1).subscription_type, undefined);
+  assert.equal(fake.pays.at(-1).amount, undefined);
+  assert.equal(fake.pays.at(-1).variation_code, 'classic');
   assert.equal(r.body.data.balance, 6700);
 });
 
@@ -382,6 +415,30 @@ test('wrong PIN locks after 5 attempts', async () => {
   await User.updateOne({ phone: PHONE }, { pinLockedUntil: null, pinFailedAttempts: 0 });
 });
 
+test('renew uses the Renewal_Amount from VTPass, not a package', async () => {
+  let r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'startimes', billersCode: SMARTCARD_OK, mode: 'renew', pin: '1234' },
+  });
+  assert.equal(r.status, 400);
+
+  await credit(19000); // balance 25700
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, mode: 'renew', pin: '1234', amount: 5 },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.transaction.amount, 19000);
+  assert.equal(r.body.data.transaction.packageName, 'DStv Compact (renewal)');
+  assert.equal(r.body.data.transaction.customerName, 'TEST CUSTOMER');
+  assert.equal(r.body.data.balance, 6700);
+  const sent = fake.pays.at(-1);
+  assert.equal(sent.subscription_type, 'renew');
+  assert.equal(sent.amount, 19000);
+  assert.equal(sent.variation_code, undefined);
+  assert.equal(sent.quantity, undefined);
+});
+
 test('Paystack funding: initialize, verify and webhook credit exactly once', async () => {
   let r = await api('POST', '/api/wallet/fund/initialize', { token, body: { amount: 50 } });
   assert.equal(r.status, 400);
@@ -441,4 +498,21 @@ test('request ids start with Lagos time', () => {
   const { vtpassRequestId } = require('../src/utils');
   // 2026-10-27 08:05 UTC is 09:05 in Lagos (UTC+1)
   assert.match(vtpassRequestId(new Date('2026-10-27T08:05:00Z')), /^202610270905[0-9a-f]{12}$/);
+});
+
+test('VTPass auth: API keys, or Basic auth with email and password', () => {
+  const { config } = require('../src/config');
+  const { authHeaders } = require('../src/services/vtpass');
+  assert.deepEqual(authHeaders('GET'), { 'api-key': 'api', 'public-key': 'pub' });
+  assert.deepEqual(authHeaders('POST'), { 'api-key': 'api', 'secret-key': 'sec' });
+
+  const saved = { ...config.vtpass };
+  Object.assign(config.vtpass, { apiKey: '', publicKey: '', secretKey: '', email: 'me@example.com', password: 'p@ss' });
+  try {
+    const expected = `Basic ${Buffer.from('me@example.com:p@ss').toString('base64')}`;
+    assert.deepEqual(authHeaders('POST'), { Authorization: expected });
+    assert.deepEqual(authHeaders('GET'), { Authorization: expected });
+  } finally {
+    Object.assign(config.vtpass, saved);
+  }
 });

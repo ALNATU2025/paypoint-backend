@@ -41,7 +41,7 @@ Send `Authorization: Bearer <token>` on every route except register, login, heal
 | GET | `/api/cable/providers` | | dstv, gotv, startimes |
 | GET | `/api/cable/:serviceID/packages` | | `[{ code, name, amount }]` from VTPass |
 | POST | `/api/cable/verify` | `serviceID, billersCode` | `customerName, currentBouquet, dueDate, renewalAmount…` |
-| POST | `/api/cable/pay` | `serviceID, billersCode, variationCode, months?, pin, customerName?` | Returns `{ transaction, balance }`. Status is `success`, `pending` or `failed` (failed is refunded) |
+| POST | `/api/cable/pay` | **Change:** `serviceID, billersCode, variationCode, months?, pin`<br>**Renew:** `serviceID, billersCode, mode: "renew", pin` | Returns `{ transaction, balance }`. Status is `success`, `pending` or `failed` (failed is refunded) |
 | POST | `/api/cable/requery/:id` | | Updates a pending payment |
 | GET | `/api/wallet` | | `{ balance }` |
 | POST | `/api/wallet/fund/initialize` | `amount` | Returns `{ authorizationUrl, reference }`; open the URL to pay |
@@ -51,7 +51,23 @@ Send `Authorization: Bearer <token>` on every route except register, login, heal
 | POST | `/api/webhooks/paystack` | | Set this URL in Paystack, under Settings → API Keys & Webhooks |
 | POST | `/api/admin/wallet/credit` | `phone, amount, note?` | Header `x-admin-key`. Only active when `ADMIN_API_KEY` is set |
 
-`months` (1–12) applies to DStv and GOtv. StarTimes is always 1 month.
+- **`months`** (1–12) applies to DStv and GOtv. StarTimes is always 1 month.
+- **Change vs renew** follows the VTPass TV docs:
+  - **Change** sends `variation_code` and, for DStv/GOtv, `subscription_type: "change"` and `quantity`. It sends **no `amount`**, so VTPass charges the bouquet price; if an amount were sent, VTPass would top up the decoder with exactly that amount.
+  - **Renew** (DStv and GOtv only) sends `subscription_type: "renew"` with `amount` set to the decoder's `Renewal_Amount`. The backend fetches that amount from merchant-verify itself.
+- **GOtv due dates** (`02-FEB-25`) are converted to `YYYY-MM-DD`.
+- **StarTimes `WrongBillersCode: true`** is treated as an invalid number.
+
+### Testing in the VTPass sandbox
+Set `VTPASS_MODE=sandbox` and use your sandbox credentials. These smartcard numbers simulate each outcome:
+
+| Number | Outcome |
+|---|---|
+| `1212121212` | Verified, payment successful |
+| `201000000000` | Payment pending (resolved later with requery) |
+| `300000000000` | Timeout (left pending; the money stays held until requery) |
+| `400000000000` / `500000000000` | No response / unexpected response (left pending) |
+| any other number | Verification or payment fails (wallet refunded) |
 
 ## Deploy on Render
 
@@ -68,7 +84,7 @@ Send `Authorization: Bearer <token>` on every route except register, login, heal
    - `JWT_SECRET` (a long random string)
    - `NODE_ENV=production`
    - `VTPASS_MODE=live`
-   - `VTPASS_API_KEY`, `VTPASS_PUBLIC_KEY` and `VTPASS_SECRET_KEY`, from your VTPass dashboard under Settings → API Keys
+   - `VTPASS_API_KEY`, `VTPASS_PUBLIC_KEY` and `VTPASS_SECRET_KEY`, from your VTPass dashboard under Settings → API Keys. Alternatively, set `VTPASS_EMAIL` and `VTPASS_PASSWORD` to use Basic auth.
    - `PAYSTACK_SECRET_KEY` (`sk_live_…`)
    - `PUBLIC_URL=https://paypoint-backend-aj52.onrender.com`
 4. **VTPass account.** Your VTPass account must be funded, because VTPass debits *your* VTPass wallet for each subscription.
