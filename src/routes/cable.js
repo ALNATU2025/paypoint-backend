@@ -88,24 +88,44 @@ router.post(
   }),
 );
 
-// POST /api/cable/pay { serviceID, billersCode, variationCode, months?, pin, customerName? }
+// POST /api/cable/pay
+//   change: { serviceID, billersCode, variationCode, months?, pin, customerName? }
+//   renew:  { serviceID, billersCode, mode: "renew", pin }  (DStv / GOtv only)
 router.post(
   '/pay',
   ah(async (req, res) => {
     const body = req.body || {};
-    requireFields(body, ['serviceID', 'billersCode', 'variationCode', 'pin']);
+    const mode = body.mode === 'renew' ? 'renew' : 'change';
+    requireFields(body, mode === 'renew' ? ['serviceID', 'billersCode', 'pin'] : ['serviceID', 'billersCode', 'variationCode', 'pin']);
     const s = service(body.serviceID);
     const billersCode = cleanNumber(body.billersCode);
-    const months = s.supportsMonths ? Math.min(Math.max(parseInt(body.months, 10) || 1, 1), 12) : 1;
+    if (mode === 'renew' && !s.supportsMonths) throw new ApiError(400, `${s.name} does not support renewal. Choose a package.`);
+    const months = mode === 'change' && s.supportsMonths ? Math.min(Math.max(parseInt(body.months, 10) || 1, 1), 12) : 1;
 
     await checkPin(req.user, String(body.pin));
 
-    // Price always comes from VTPass, never from the client.
-    const packages = await vtpass.getVariations(s.serviceID);
-    const pkg = packages.find((p) => p.code === String(body.variationCode));
-    if (!pkg) throw new ApiError(400, 'That package is no longer available. Please choose another.');
+    // Prices always come from VTPass, never from the client.
+    let amountNaira;
+    let variationCode;
+    let packageName;
+    let customerName = body.customerName ? String(body.customerName).slice(0, 80) : undefined;
+    if (mode === 'renew') {
+      const info = await vtpass.verifyCustomer(s.serviceID, billersCode);
+      if (!info.renewalAmount || info.renewalAmount <= 0) {
+        throw new ApiError(400, 'Renewal is not available for this decoder. Please choose a package.');
+      }
+      amountNaira = info.renewalAmount;
+      packageName = info.currentBouquet ? `${info.currentBouquet} (renewal)` : 'Bouquet renewal';
+      customerName = info.customerName;
+    } else {
+      const packages = await vtpass.getVariations(s.serviceID);
+      const pkg = packages.find((p) => p.code === String(body.variationCode));
+      if (!pkg) throw new ApiError(400, 'That package is no longer available. Please choose another.');
+      amountNaira = pkg.amount * months;
+      variationCode = pkg.code;
+      packageName = pkg.name;
+    }
 
-    const amountNaira = pkg.amount * months;
     const feeKobo = toKobo(config.serviceFeeNaira);
     const totalKobo = toKobo(amountNaira) + feeKobo;
 
@@ -117,12 +137,12 @@ router.post(
       status: 'pending',
       amountKobo: totalKobo,
       feeKobo,
-      description: `${s.name} ${pkg.name}`,
+      description: `${s.name} ${packageName}`,
       serviceID: s.serviceID,
       billersCode,
-      customerName: body.customerName ? String(body.customerName).slice(0, 80) : undefined,
-      variationCode: pkg.code,
-      packageName: pkg.name,
+      customerName,
+      variationCode,
+      packageName,
       months,
       phone: req.user.phone,
       requestId: vtpassRequestId(),
@@ -134,10 +154,11 @@ router.post(
         requestId: tx.requestId,
         serviceID: s.serviceID,
         billersCode,
-        variationCode: pkg.code,
+        variationCode,
         amount: amountNaira,
         phone: req.user.phone,
         months,
+        mode,
       });
     } catch (e) {
       // Not configured / unexpected error before VTPass accepted it: refund.

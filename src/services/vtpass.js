@@ -1,9 +1,10 @@
 // Thin client for the VTPass API (https://www.vtpass.com/documentation).
 //
-// Auth: GET requests send `api-key` + `public-key`; POST requests send
-// `api-key` + `secret-key`.
+// Auth, either:
+//  - API keys: GET sends `api-key` + `public-key`; POST sends `api-key` + `secret-key`
+//  - Basic auth with the VTPass account email and password
 
-const { config, vtpassConfigured } = require('../config');
+const { config, vtpassConfigured, vtpassUsesKeys } = require('../config');
 const { ApiError } = require('../utils');
 
 const CABLE_SERVICES = {
@@ -14,6 +15,37 @@ const CABLE_SERVICES = {
 
 class VtpassNetworkError extends Error {}
 
+function authHeaders(method) {
+  const v = config.vtpass;
+  if (vtpassUsesKeys()) {
+    return method === 'GET'
+      ? { 'api-key': v.apiKey, 'public-key': v.publicKey }
+      : { 'api-key': v.apiKey, 'secret-key': v.secretKey };
+  }
+  return { Authorization: `Basic ${Buffer.from(`${v.email}:${v.password}`).toString('base64')}` };
+}
+
+const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+
+/**
+ * VTPass returns due dates as "2025-02-06T00:00:00" (DStv) or "02-FEB-25"
+ * (GOtv). Returns an ISO date string (YYYY-MM-DD) or null.
+ */
+function parseDueDate(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const m = /^(\d{1,2})-([A-Za-z]{3})-(\d{2}|\d{4})$/.exec(s);
+  if (m && MONTHS[m[2].toUpperCase()] !== undefined) {
+    const year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    const d = new Date(Date.UTC(year, MONTHS[m[2].toUpperCase()], Number(m[1])));
+    return d.toISOString().slice(0, 10);
+  }
+  const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+  if (iso) return iso[1];
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
 function ensureConfigured() {
   if (!vtpassConfigured()) throw new ApiError(503, 'Cable TV payments are not configured yet');
 }
@@ -21,9 +53,7 @@ function ensureConfigured() {
 async function call(method, path, body) {
   ensureConfigured();
   const v = config.vtpass;
-  const headers = { 'api-key': v.apiKey, 'Content-Type': 'application/json', Accept: 'application/json' };
-  if (method === 'GET') headers['public-key'] = v.publicKey;
-  else headers['secret-key'] = v.secretKey;
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders(method) };
 
   let res;
   let text;
@@ -97,7 +127,7 @@ async function verifyCustomer(serviceID, billersCode) {
     throw e;
   }
   const c = (json && json.content) || {};
-  if (json.code !== '000' || c.error || !c.Customer_Name) {
+  if (json.code !== '000' || c.error || c.WrongBillersCode === true || !c.Customer_Name) {
     throw new ApiError(422, c.error || json.response_description || 'Could not verify this number', {
       vtpassCode: json.code,
     });
@@ -106,7 +136,7 @@ async function verifyCustomer(serviceID, billersCode) {
   return {
     customerName: String(c.Customer_Name).trim(),
     status: c.Status || null,
-    dueDate: c.Due_Date || null,
+    dueDate: parseDueDate(c.Due_Date),
     currentBouquet: c.Current_Bouquet || null,
     currentBouquetCode: c.Current_Bouquet_Code || null,
     renewalAmount: num(c.Renewal_Amount),
@@ -162,18 +192,27 @@ function interpret(json) {
   };
 }
 
-async function pay({ requestId, serviceID, billersCode, variationCode, amount, phone, months }) {
-  const body = {
-    request_id: requestId,
-    serviceID,
-    billersCode,
-    variation_code: variationCode,
-    amount,
-    phone,
-  };
-  if (CABLE_SERVICES[serviceID] && CABLE_SERVICES[serviceID].supportsMonths) {
-    body.subscription_type = 'change';
-    body.quantity = months;
+/**
+ * Buy a subscription.
+ *  - mode "change" (default): new / changed bouquet by variation_code. No
+ *    amount is sent so VTPass charges the bouquet price (sending an amount
+ *    would top up the decoder with exactly that amount). DStv/GOtv also send
+ *    subscription_type "change" and quantity (months).
+ *  - mode "renew" (DStv/GOtv): renew the current bouquet at the
+ *    Renewal_Amount from merchant-verify; no variation_code.
+ */
+async function pay({ requestId, serviceID, billersCode, variationCode, amount, phone, months, mode = 'change' }) {
+  const body = { request_id: requestId, serviceID, billersCode, phone };
+  const tv = CABLE_SERVICES[serviceID];
+  if (mode === 'renew') {
+    body.subscription_type = 'renew';
+    body.amount = amount;
+  } else {
+    body.variation_code = variationCode;
+    if (tv && tv.supportsMonths) {
+      body.subscription_type = 'change';
+      body.quantity = months;
+    }
   }
   try {
     return interpret(await call('POST', '/pay', body));
@@ -201,4 +240,4 @@ function clearCache() {
   cache.clear();
 }
 
-module.exports = { CABLE_SERVICES, getVariations, verifyCustomer, pay, requery, interpret, clearCache };
+module.exports = { CABLE_SERVICES, getVariations, verifyCustomer, pay, requery, interpret, clearCache, authHeaders, parseDueDate };

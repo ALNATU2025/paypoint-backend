@@ -30,6 +30,9 @@ const config = {
     apiKey: env.VTPASS_API_KEY || '',
     publicKey: env.VTPASS_PUBLIC_KEY || '',
     secretKey: env.VTPASS_SECRET_KEY || '',
+    // Alternative to API keys: Basic auth with your VTPass login.
+    email: env.VTPASS_EMAIL || '',
+    password: env.VTPASS_PASSWORD || '',
     timeoutMs: Number(env.VTPASS_TIMEOUT_MS) || 45000,
   },
 
@@ -60,16 +63,19 @@ function fatalConfigErrors() {
 /** Problems that disable a feature but let the server run. */
 function configWarnings() {
   const warnings = [];
-  const v = config.vtpass;
-  if (!v.apiKey || !v.publicKey || !v.secretKey) {
-    warnings.push('VTPass keys missing (VTPASS_API_KEY, VTPASS_PUBLIC_KEY, VTPASS_SECRET_KEY): cable TV is disabled');
+  if (!vtpassConfigured()) {
+    warnings.push(
+      'VTPass credentials missing: set VTPASS_API_KEY + VTPASS_PUBLIC_KEY + VTPASS_SECRET_KEY, ' +
+        'or VTPASS_EMAIL + VTPASS_PASSWORD. Cable TV is disabled.',
+    );
   }
   if (!config.paystack.secretKey) warnings.push('PAYSTACK_SECRET_KEY missing: card/bank wallet funding is disabled');
   if (!config.publicUrl) warnings.push('PUBLIC_URL missing: Paystack will not redirect back after payment');
   return warnings;
 }
 
-const vtpassConfigured = () => Boolean(config.vtpass.apiKey && config.vtpass.publicKey && config.vtpass.secretKey);
+const vtpassUsesKeys = () => Boolean(config.vtpass.apiKey && config.vtpass.publicKey && config.vtpass.secretKey);
+const vtpassConfigured = () => vtpassUsesKeys() || Boolean(config.vtpass.email && config.vtpass.password);
 const paystackConfigured = () => Boolean(config.paystack.secretKey);
 
-module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, paystackConfigured };
+module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, vtpassUsesKeys, paystackConfigured };

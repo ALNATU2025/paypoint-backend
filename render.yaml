@@ -25,6 +25,10 @@ services:
         sync: false
       - key: VTPASS_SECRET_KEY
         sync: false
+      - key: VTPASS_EMAIL
+        sync: false
+      - key: VTPASS_PASSWORD
+        sync: false
       - key: PAYSTACK_SECRET_KEY
         sync: false
       - key: PUBLIC_URL
