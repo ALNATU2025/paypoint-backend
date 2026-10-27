@@ -1,8 +1,6 @@
 const express = require('express');
 const { Transaction, User } = require('../models');
 const { requireAuth, requireAdmin } = require('../middleware');
-const paystack = require('../services/paystack');
-const { confirmFunding } = require('./wallet');
 const { ApiError, ah, toKobo, toNaira, normalizePhone, randomRef } = require('../utils');
 
 // ---------------------------------------------------------------------------
@@ -39,32 +37,6 @@ transactions.get(
 );
 
 // ---------------------------------------------------------------------------
-// Webhooks (raw body is attached by app.js for signature checks)
-// ---------------------------------------------------------------------------
-
-const webhooks = express.Router();
-
-// POST /api/webhooks/paystack
-webhooks.post(
-  '/paystack',
-  ah(async (req, res) => {
-    if (!paystack.isValidSignature(req.rawBody, req.get('x-paystack-signature'))) {
-      return res.status(401).json({ success: false, message: 'Invalid signature' });
-    }
-    const event = req.body || {};
-    if (event.event === 'charge.success' && event.data && event.data.reference) {
-      try {
-        // Re-verify with Paystack rather than trusting the payload.
-        await confirmFunding(String(event.data.reference));
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 404)) throw e;
-      }
-    }
-    res.json({ success: true });
-  }),
-);
-
-// ---------------------------------------------------------------------------
 // Admin (only when ADMIN_API_KEY is set; send it as x-admin-key)
 // ---------------------------------------------------------------------------
 
@@ -95,4 +67,4 @@ admin.post(
   }),
 );
 
-module.exports = { transactions, webhooks, admin };
+module.exports = { transactions, admin };

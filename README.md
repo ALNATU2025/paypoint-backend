@@ -2,7 +2,7 @@
 
 This is the backend for the Paypoint mobile app. It handles:
 - user accounts with a 4-digit transaction PIN
-- a naira wallet, funded by card or bank through **Paystack**
+- a naira wallet (credited by an admin for now; card funding comes later)
 - **DStv, GOtv and StarTimes** subscriptions through **VTPass**
 
 It's built with Node.js 20+, Express and MongoDB.
@@ -24,16 +24,15 @@ The rules that protect the money:
 - **A failed payment** is refunded exactly once.
 - **The VTPass `request_id`** follows VTPass's required format: the date and time in Lagos (`YYYYMMDDHHmm`), then a unique suffix.
 - **The transaction PIN** is hashed with bcrypt. Five wrong PINs lock payments for 15 minutes.
-- **Wallet funding** is confirmed directly with Paystack, from the verify call, the browser redirect or the signed webhook. Each payment is credited once.
 
 ## API
 
 All responses look like `{ "success": true, "data": … }` or `{ "success": false, "message": "…" }`.
-Send `Authorization: Bearer <token>` on every route except register, login, health and the webhook.
+Send `Authorization: Bearer <token>` on every route except register, login and health.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| GET | `/health` | | Database state and whether VTPass and Paystack are configured |
+| GET | `/health` | | Database state, and whether VTPass is configured (`missing` lists any unset key names) |
 | POST | `/api/auth/register` | `fullName, phone, email?, password` | Returns `{ token, user }` |
 | POST | `/api/auth/login` | `phone, password` | Returns `{ token, user }` |
 | GET | `/api/auth/me` | | The user, including wallet `balance` and `hasPin` |
@@ -44,11 +43,8 @@ Send `Authorization: Bearer <token>` on every route except register, login, heal
 | POST | `/api/cable/pay` | **Change:** `serviceID, billersCode, variationCode, months?, pin`<br>**Renew:** `serviceID, billersCode, mode: "renew", pin` | Returns `{ transaction, balance }`. Status is `success`, `pending` or `failed` (failed is refunded) |
 | POST | `/api/cable/requery/:id` | | Updates a pending payment |
 | GET | `/api/wallet` | | `{ balance }` |
-| POST | `/api/wallet/fund/initialize` | `amount` | Returns `{ authorizationUrl, reference }`; open the URL to pay |
-| GET | `/api/wallet/fund/verify/:reference` | | Confirms the payment with Paystack and credits the wallet |
 | GET | `/api/transactions` | `?type=cable\|funding&limit=` | Newest first |
 | GET | `/api/transactions/:id` | | |
-| POST | `/api/webhooks/paystack` | | Set this URL in Paystack, under Settings → API Keys & Webhooks |
 | POST | `/api/admin/wallet/credit` | `phone, amount, note?` | Header `x-admin-key`. Only active when `ADMIN_API_KEY` is set |
 
 - **`months`** (1–12) applies to DStv and GOtv. StarTimes is always 1 month.
@@ -84,12 +80,17 @@ Set `VTPASS_MODE=sandbox` and use your sandbox credentials. These smartcard numb
    - `JWT_SECRET` (a long random string)
    - `NODE_ENV=production`
    - `VTPASS_MODE=live`
-   - `VTPASS_API_KEY`, `VTPASS_PUBLIC_KEY` and `VTPASS_SECRET_KEY`, from your VTPass dashboard under Settings → API Keys. Alternatively, set `VTPASS_EMAIL` and `VTPASS_PASSWORD` to use Basic auth.
-   - `PAYSTACK_SECRET_KEY` (`sk_live_…`)
-   - `PUBLIC_URL=https://paypoint-backend-aj52.onrender.com`
+   - `VTPASS_API_KEY`, `VTPASS_PUBLIC_KEY` and `VTPASS_SECRET_KEY`, from your VTPass dashboard under Settings → API Keys. Use these exact names, and paste the values without quotes.
+   - `ADMIN_API_KEY`, any long random text. It lets you credit user wallets until card funding is added.
 4. **VTPass account.** Your VTPass account must be funded, because VTPass debits *your* VTPass wallet for each subscription.
-5. **Paystack webhook.** In Paystack, set the webhook URL to `https://paypoint-backend-aj52.onrender.com/api/webhooks/paystack`.
-6. **Deploy.** Then open `https://paypoint-backend-aj52.onrender.com/health`. It should show `"db":"connected"` and `"configured":true` for VTPass.
+5. **Deploy.** Then open `https://paypoint-backend-aj52.onrender.com/health`. It should show `"db":"connected"` and `"configured":true` for VTPass. If any key is missing, its name appears under `missing`.
+
+### Funding a wallet (until card funding is added)
+```bash
+curl -X POST https://paypoint-backend-aj52.onrender.com/api/admin/wallet/credit \
+  -H "x-admin-key: YOUR_ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"phone":"08031234567","amount":5000,"note":"Cash deposit"}'
+```
 
 On the free plan, Render puts the service to sleep after 15 minutes without traffic, and the first request then takes about 30–50 seconds. The app waits long enough for that.
 
@@ -107,4 +108,4 @@ node --env-file=.env src/server.js
 MONGODB_URI=mongodb://127.0.0.1:27017/paypoint_test npm test
 ```
 
-The tests run against fake VTPass and Paystack servers. They cover sign-up and login, PINs and lockout, live prices, successful, failed and pending payments, refunds, requery, Paystack funding with a signed webhook, and per-user data scoping. GitHub Actions runs them on every push, with a real MongoDB.
+The tests run against a fake VTPass server. They cover sign-up and login, PINs and lockout, live prices, change and renew, successful, failed and pending payments, refunds, requery, configuration checks and per-user data scoping. GitHub Actions runs them on every push, with a real MongoDB.

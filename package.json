@@ -1,7 +1,7 @@
 {
   "name": "paypoint-backend",
   "version": "1.0.0",
-  "description": "Paypoint API: accounts, wallet, Paystack funding and VTPass cable TV (DStv, GOtv, StarTimes).",
+  "description": "Paypoint API: accounts, wallet and VTPass cable TV (DStv, GOtv, StarTimes).",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {

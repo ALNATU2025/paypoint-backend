@@ -2,12 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const mongoose = require('mongoose');
-const { config, vtpassConfigured, paystackConfigured } = require('./config');
+const { config, vtpassConfigured, missingVtpassVars } = require('./config');
 const { notFound, errorHandler } = require('./middleware');
 const authRoutes = require('./routes/auth');
 const cableRoutes = require('./routes/cable');
 const { router: walletRoutes } = require('./routes/wallet');
-const { transactions, webhooks, admin } = require('./routes/misc');
+const { transactions, admin } = require('./routes/misc');
 
 function createApp() {
   const app = express();
@@ -15,23 +15,14 @@ function createApp() {
   app.disable('x-powered-by');
   app.use(helmet());
   app.use(cors());
-  app.use(
-    express.json({
-      limit: '100kb',
-      // Keep the raw bytes for webhook signature verification.
-      verify: (req, res, buf) => {
-        if (req.originalUrl.startsWith('/api/webhooks/')) req.rawBody = buf;
-      },
-    }),
-  );
+  app.use(express.json({ limit: '100kb' }));
 
   app.get('/', (req, res) => res.json({ name: 'Paypoint API', status: 'ok' }));
   app.get('/health', (req, res) =>
     res.json({
       ok: true,
       db: ['disconnected', 'connected', 'connecting', 'disconnecting'][mongoose.connection.readyState] || 'unknown',
-      vtpass: { mode: config.vtpass.mode, configured: vtpassConfigured() },
-      paystack: { configured: paystackConfigured() },
+      vtpass: { mode: config.vtpass.mode, configured: vtpassConfigured(), missing: missingVtpassVars() },
       time: new Date().toISOString(),
     }),
   );
@@ -40,7 +31,6 @@ function createApp() {
   app.use('/api/cable', cableRoutes);
   app.use('/api/wallet', walletRoutes);
   app.use('/api/transactions', transactions);
-  app.use('/api/webhooks', webhooks);
   app.use('/api/admin', admin);
 
   app.use(notFound);

@@ -1,10 +1,9 @@
 // Thin client for the VTPass API (https://www.vtpass.com/documentation).
 //
-// Auth, either:
-//  - API keys: GET sends `api-key` + `public-key`; POST sends `api-key` + `secret-key`
-//  - Basic auth with the VTPass account email and password
+// Auth with API keys: GET sends `api-key` + `public-key`; POST sends
+// `api-key` + `secret-key`.
 
-const { config, vtpassConfigured, vtpassUsesKeys } = require('../config');
+const { config, vtpassConfigured } = require('../config');
 const { ApiError } = require('../utils');
 
 const CABLE_SERVICES = {
@@ -17,12 +16,9 @@ class VtpassNetworkError extends Error {}
 
 function authHeaders(method) {
   const v = config.vtpass;
-  if (vtpassUsesKeys()) {
-    return method === 'GET'
-      ? { 'api-key': v.apiKey, 'public-key': v.publicKey }
-      : { 'api-key': v.apiKey, 'secret-key': v.secretKey };
-  }
-  return { Authorization: `Basic ${Buffer.from(`${v.email}:${v.password}`).toString('base64')}` };
+  return method === 'GET'
+    ? { 'api-key': v.apiKey, 'public-key': v.publicKey }
+    : { 'api-key': v.apiKey, 'secret-key': v.secretKey };
 }
 
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
@@ -47,7 +43,7 @@ function parseDueDate(raw) {
 }
 
 function ensureConfigured() {
-  if (!vtpassConfigured()) throw new ApiError(503, 'Cable TV payments are not configured yet');
+  if (!vtpassConfigured()) throw new ApiError(503, 'Cable TV is temporarily unavailable. Please try again later.');
 }
 
 async function call(method, path, body) {

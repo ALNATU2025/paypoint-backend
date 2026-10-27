@@ -1,13 +1,12 @@
 // End-to-end API tests against a real MongoDB (MONGODB_URI) with fake
-// VTPass and Paystack servers. Run: MONGODB_URI=mongodb://localhost/paypoint_test npm test
+// VTPass server. Run: MONGODB_URI=mongodb://localhost/paypoint_test npm test
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const crypto = require('node:crypto');
 
 // ---------------------------------------------------------------------------
-// Fake VTPass + Paystack
+// Fake VTPass
 // ---------------------------------------------------------------------------
 
 const SMARTCARD_OK = '1212121212';
@@ -15,9 +14,8 @@ const SMARTCARD_FAIL = '1111111111';
 const SMARTCARD_PENDING = '2222222222';
 const SMARTCARD_INVALID = '9999999999';
 const SMARTCARD_WRONG_STARTIMES = '8888888888';
-const PAYSTACK_SECRET = 'sk_test_fake';
 
-const fake = { pays: [], requeryResult: 'delivered', paystack: {} };
+const fake = { pays: [], requeryResult: 'delivered' };
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -113,21 +111,6 @@ const fakeServer = http.createServer(async (req, res) => {
     return send({ code: '404' }, 404);
   }
 
-  // ---- Paystack ----
-  if (url.pathname.startsWith('/paystack/')) {
-    if (req.headers.authorization !== `Bearer ${PAYSTACK_SECRET}`) return send({ status: false, message: 'Invalid key' }, 401);
-    const path = url.pathname.slice('/paystack'.length);
-    if (path === '/transaction/initialize') {
-      fake.paystack[body.reference] = { amount: body.amount, status: 'abandoned' };
-      return send({ status: true, data: { authorization_url: `https://checkout.paystack.com/${body.reference}`, reference: body.reference } });
-    }
-    if (path.startsWith('/transaction/verify/')) {
-      const ref = decodeURIComponent(path.split('/').pop());
-      const t = fake.paystack[ref];
-      if (!t) return send({ status: false, message: 'Transaction reference not found' }, 400);
-      return send({ status: true, data: { reference: ref, status: t.status, amount: t.amount, currency: 'NGN' } });
-    }
-  }
   send({ message: 'not found' }, 404);
 });
 
@@ -151,10 +134,7 @@ before(async () => {
     VTPASS_API_KEY: 'api',
     VTPASS_PUBLIC_KEY: 'pub',
     VTPASS_SECRET_KEY: 'sec',
-    PAYSTACK_BASE_URL: `${fakeBase}/paystack`,
-    PAYSTACK_SECRET_KEY: PAYSTACK_SECRET,
     ADMIN_API_KEY: 'admin-key',
-    PUBLIC_URL: 'https://example.test',
   });
 
   mongoose = require('mongoose');
@@ -439,38 +419,6 @@ test('renew uses the Renewal_Amount from VTPass, not a package', async () => {
   assert.equal(sent.quantity, undefined);
 });
 
-test('Paystack funding: initialize, verify and webhook credit exactly once', async () => {
-  let r = await api('POST', '/api/wallet/fund/initialize', { token, body: { amount: 50 } });
-  assert.equal(r.status, 400);
-
-  r = await api('POST', '/api/wallet/fund/initialize', { token, body: { amount: 2000 } });
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  const ref = r.body.data.reference;
-  assert.match(r.body.data.authorizationUrl, /checkout\.paystack\.com/);
-
-  // Not paid yet: stays pending.
-  fake.paystack[ref].status = 'ongoing';
-  r = await api('GET', `/api/wallet/fund/verify/${ref}`, { token });
-  assert.equal(r.body.data.transaction.status, 'pending');
-  assert.equal(r.body.data.balance, 6700);
-
-  // Paid: webhook with a bad signature is rejected, a good one credits.
-  fake.paystack[ref].status = 'success';
-  const payload = JSON.stringify({ event: 'charge.success', data: { reference: ref } });
-  r = await api('POST', '/api/webhooks/paystack', { raw: payload, headers: { 'x-paystack-signature': 'nope' } });
-  assert.equal(r.status, 401);
-  const sig = crypto.createHmac('sha512', PAYSTACK_SECRET).update(payload).digest('hex');
-  r = await api('POST', '/api/webhooks/paystack', { raw: payload, headers: { 'x-paystack-signature': sig } });
-  assert.equal(r.status, 200);
-
-  r = await api('GET', `/api/wallet/fund/verify/${ref}`, { token });
-  assert.equal(r.body.data.transaction.status, 'success');
-  assert.equal(r.body.data.balance, 8700, 'credited once');
-  r = await api('POST', '/api/webhooks/paystack', { raw: payload, headers: { 'x-paystack-signature': sig } });
-  r = await api('GET', '/api/wallet', { token });
-  assert.equal(r.body.data.balance, 8700, 'still credited once');
-});
-
 test('transactions list is scoped to the user', async () => {
   let r = await api('GET', '/api/transactions', { token });
   assert.equal(r.status, 200);
@@ -500,19 +448,38 @@ test('request ids start with Lagos time', () => {
   assert.match(vtpassRequestId(new Date('2026-10-27T08:05:00Z')), /^202610270905[0-9a-f]{12}$/);
 });
 
-test('VTPass auth: API keys, or Basic auth with email and password', () => {
-  const { config } = require('../src/config');
+test('VTPass auth uses the API keys', () => {
   const { authHeaders } = require('../src/services/vtpass');
   assert.deepEqual(authHeaders('GET'), { 'api-key': 'api', 'public-key': 'pub' });
   assert.deepEqual(authHeaders('POST'), { 'api-key': 'api', 'secret-key': 'sec' });
+});
 
-  const saved = { ...config.vtpass };
-  Object.assign(config.vtpass, { apiKey: '', publicKey: '', secretKey: '', email: 'me@example.com', password: 'p@ss' });
+test('health lists missing VTPass variables by name only', async () => {
+  const { config } = require('../src/config');
+  const saved = config.vtpass.secretKey;
+  config.vtpass.secretKey = '';
   try {
-    const expected = `Basic ${Buffer.from('me@example.com:p@ss').toString('base64')}`;
-    assert.deepEqual(authHeaders('POST'), { Authorization: expected });
-    assert.deepEqual(authHeaders('GET'), { Authorization: expected });
+    const r = await api('POST', '/api/cable/verify', { token, body: { serviceID: 'dstv', billersCode: SMARTCARD_OK } });
+    assert.equal(r.status, 503);
   } finally {
-    Object.assign(config.vtpass, saved);
+    config.vtpass.secretKey = saved;
   }
+  const h = await api('GET', '/health');
+  assert.deepEqual(h.body.vtpass.missing, []);
+  assert.equal(JSON.stringify(h.body).includes('sec'), false, 'never exposes key values');
+});
+
+test('config trims whitespace and quotes pasted into env vars', () => {
+  const { execFileSync } = require('node:child_process');
+  const out = execFileSync(
+    process.execPath,
+    ['-e', "const {config,configWarnings}=require('./src/config');console.log(JSON.stringify([config.vtpass.apiKey,configWarnings()]))"],
+    {
+      env: { ...process.env, VTPASS_API_KEY: '  "abc"  ', VTPASS_PUBLIC_KEY: 'pk', VTPASS_SECRET_KEY: '', VT_PASS_SECRET: 'x' },
+    },
+  ).toString();
+  const [key, warnings] = JSON.parse(out);
+  assert.equal(key, 'abc');
+  assert.match(warnings[0], /missing VTPASS_SECRET_KEY/);
+  assert.match(warnings[0], /VT_PASS_SECRET/);
 });
