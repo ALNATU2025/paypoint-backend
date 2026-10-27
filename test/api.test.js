@@ -45,7 +45,10 @@ const fakeServer = http.createServer(async (req, res) => {
   // ---- VTPass ----
   if (url.pathname.startsWith('/vtpass/')) {
     const isGet = req.method === 'GET';
-    if (req.headers['api-key'] !== 'api' || req.headers[isGet ? 'public-key' : 'secret-key'] !== (isGet ? 'pub' : 'sec')) {
+    const signedOk = isGet
+      ? req.headers['public-key'] === 'pub' || req.headers['secret-key'] === 'sec'
+      : req.headers['secret-key'] === 'sec';
+    if (req.headers['api-key'] !== 'api' || !signedOk) {
       return send({ code: '087', response_description: 'INVALID CREDENTIALS' });
     }
     const path = url.pathname.slice('/vtpass'.length);
@@ -448,10 +451,24 @@ test('request ids start with Lagos time', () => {
   assert.match(vtpassRequestId(new Date('2026-10-27T08:05:00Z')), /^202610270905[0-9a-f]{12}$/);
 });
 
-test('VTPass auth uses the API keys', () => {
-  const { authHeaders } = require('../src/services/vtpass');
+test('VTPass auth: public key is optional', async () => {
+  const { config } = require('../src/config');
+  const { authHeaders, clearCache } = require('../src/services/vtpass');
   assert.deepEqual(authHeaders('GET'), { 'api-key': 'api', 'public-key': 'pub' });
   assert.deepEqual(authHeaders('POST'), { 'api-key': 'api', 'secret-key': 'sec' });
+
+  const saved = config.vtpass.publicKey;
+  config.vtpass.publicKey = '';
+  try {
+    assert.deepEqual(authHeaders('GET'), { 'api-key': 'api', 'secret-key': 'sec' });
+    clearCache();
+    const r = await api('GET', '/api/cable/gotv/packages', { token });
+    assert.equal(r.status, 200, 'packages load with only api + secret key');
+    const h = await api('GET', '/health');
+    assert.equal(h.body.vtpass.configured, true);
+  } finally {
+    config.vtpass.publicKey = saved;
+  }
 });
 
 test('health lists missing VTPass variables by name only', async () => {
@@ -475,11 +492,11 @@ test('config trims whitespace and quotes pasted into env vars', () => {
     process.execPath,
     ['-e', "const {config,configWarnings}=require('./src/config');console.log(JSON.stringify([config.vtpass.apiKey,configWarnings()]))"],
     {
-      env: { ...process.env, VTPASS_API_KEY: '  "abc"  ', VTPASS_PUBLIC_KEY: 'pk', VTPASS_SECRET_KEY: '', VT_PASS_SECRET: 'x' },
+      env: { ...process.env, VTPASS_API_KEY: '  "abc"  ', VTPASS_PUBLIC_KEY: '', VTPASS_SECRET_KEY: '', VT_PASS_SECRET: 'x' },
     },
   ).toString();
   const [key, warnings] = JSON.parse(out);
   assert.equal(key, 'abc');
-  assert.match(warnings[0], /missing VTPASS_SECRET_KEY/);
+  assert.match(warnings[0], /missing VTPASS_SECRET_KEY\./, 'public key is not required');
   assert.match(warnings[0], /VT_PASS_SECRET/);
 });

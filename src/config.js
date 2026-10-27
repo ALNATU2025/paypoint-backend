@@ -38,12 +38,14 @@ const config = {
 
 config.isProduction = config.env === 'production';
 
-const VTPASS_VARS = ['VTPASS_API_KEY', 'VTPASS_PUBLIC_KEY', 'VTPASS_SECRET_KEY'];
+// Required. VTPASS_PUBLIC_KEY is optional: without it, GET requests are
+// signed with the secret key instead.
+const VTPASS_VARS = ['VTPASS_API_KEY', 'VTPASS_SECRET_KEY'];
 
 /** Names of VTPass variables that are missing or empty. */
 const missingVtpassVars = () => VTPASS_VARS.filter((n) => !read(n));
 
-const vtpassConfigured = () => Boolean(config.vtpass.apiKey && config.vtpass.publicKey && config.vtpass.secretKey);
+const vtpassConfigured = () => Boolean(config.vtpass.apiKey && config.vtpass.secretKey);
 
 /** Problems that stop the server from starting. */
 function fatalConfigErrors() {
@@ -62,7 +64,9 @@ function configWarnings() {
   const missing = missingVtpassVars();
   if (missing.length) {
     // Help spot typos: show VTPass-like variable names that ARE set (names only, never values).
-    const similar = Object.keys(env).filter((k) => /vt.?pass|api.?key|public.?key|secret.?key/i.test(k) && !VTPASS_VARS.includes(k));
+    const similar = Object.keys(env).filter(
+      (k) => /vt.?pass|api.?key|secret.?key/i.test(k) && !VTPASS_VARS.includes(k) && k !== 'VTPASS_PUBLIC_KEY',
+    );
     warnings.push(
       `Cable TV is disabled: missing ${missing.join(', ')}.` +
         (similar.length ? ` Found similar variables: ${similar.join(', ')} (check the names).` : ''),
