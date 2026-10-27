@@ -60,7 +60,8 @@ const transactionSchema = new mongoose.Schema(
     refunded: { type: Boolean, default: false },
 
     // Wallet funding
-    channel: { type: String, enum: ['paystack', 'admin', null], default: null },
+    // 'paystack' kept so older records stay valid.
+    channel: { type: String, enum: ['admin', 'paystack', null], default: null },
     reference: { type: String, unique: true, sparse: true },
   },
   { timestamps: true },

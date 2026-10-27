@@ -44,24 +44,4 @@ async function settleCable(tx, result) {
   return settled;
 }
 
-/** Credit a pending funding transaction exactly once. */
-async function completeFunding(reference) {
-  const tx = await Transaction.findOneAndUpdate(
-    { reference, type: 'funding', status: 'pending' },
-    { status: 'success' },
-    { new: true },
-  );
-  if (!tx) return { credited: false, tx: await Transaction.findOne({ reference }) };
-  await User.updateOne({ _id: tx.user }, { $inc: { balanceKobo: tx.amountKobo } });
-  return { credited: true, tx };
-}
-
-async function failFunding(reference, message) {
-  return Transaction.findOneAndUpdate(
-    { reference, type: 'funding', status: 'pending' },
-    { status: 'failed', vtpassMessage: message || 'Payment not completed' },
-    { new: true },
-  );
-}
-
-module.exports = { debit, settleCable, completeFunding, failFunding };
+module.exports = { debit, settleCable };

@@ -3,51 +3,47 @@
 
 const env = process.env;
 
-const vtpassMode = (env.VTPASS_MODE || 'live').toLowerCase() === 'sandbox' ? 'sandbox' : 'live';
+/** Read an env var, trimming whitespace and stray quotes from copy-paste. */
+const read = (name) => String(env[name] || '').trim().replace(/^["']|["']$/g, '').trim();
+
+const vtpassMode = read('VTPASS_MODE').toLowerCase() === 'sandbox' ? 'sandbox' : 'live';
 
 const config = {
   env: env.NODE_ENV || 'development',
   port: Number(env.PORT) || 4000,
-  publicUrl: (env.PUBLIC_URL || '').replace(/\/+$/, ''),
 
-  mongoUri: env.MONGODB_URI || '',
+  mongoUri: read('MONGODB_URI'),
 
-  jwtSecret: env.JWT_SECRET || '',
-  jwtExpiresIn: env.JWT_EXPIRES_IN || '30d',
+  jwtSecret: read('JWT_SECRET'),
+  jwtExpiresIn: read('JWT_EXPIRES_IN') || '30d',
 
   // Optional key that unlocks /api/admin routes (manual wallet credit).
-  adminApiKey: env.ADMIN_API_KEY || '',
+  adminApiKey: read('ADMIN_API_KEY'),
 
   // Flat fee added to each cable payment, in naira. 0 = no fee.
-  serviceFeeNaira: Math.max(0, Number(env.SERVICE_FEE_NAIRA) || 0),
+  serviceFeeNaira: Math.max(0, Number(read('SERVICE_FEE_NAIRA')) || 0),
 
   vtpass: {
     mode: vtpassMode,
     baseUrl: (
-      env.VTPASS_BASE_URL ||
+      read('VTPASS_BASE_URL') ||
       (vtpassMode === 'sandbox' ? 'https://sandbox.vtpass.com/api' : 'https://vtpass.com/api')
     ).replace(/\/+$/, ''),
-    apiKey: env.VTPASS_API_KEY || '',
-    publicKey: env.VTPASS_PUBLIC_KEY || '',
-    secretKey: env.VTPASS_SECRET_KEY || '',
-    // Alternative to API keys: Basic auth with your VTPass login.
-    email: env.VTPASS_EMAIL || '',
-    password: env.VTPASS_PASSWORD || '',
-    timeoutMs: Number(env.VTPASS_TIMEOUT_MS) || 45000,
+    apiKey: read('VTPASS_API_KEY'),
+    publicKey: read('VTPASS_PUBLIC_KEY'),
+    secretKey: read('VTPASS_SECRET_KEY'),
+    timeoutMs: Number(read('VTPASS_TIMEOUT_MS')) || 45000,
   },
-
-  paystack: {
-    baseUrl: (env.PAYSTACK_BASE_URL || 'https://api.paystack.co').replace(/\/+$/, ''),
-    secretKey: env.PAYSTACK_SECRET_KEY || '',
-    timeoutMs: 30000,
-  },
-
-  // Wallet funding limits, in naira.
-  minFundNaira: Number(env.MIN_FUND_NAIRA) || 100,
-  maxFundNaira: Number(env.MAX_FUND_NAIRA) || 500000,
 };
 
 config.isProduction = config.env === 'production';
+
+const VTPASS_VARS = ['VTPASS_API_KEY', 'VTPASS_PUBLIC_KEY', 'VTPASS_SECRET_KEY'];
+
+/** Names of VTPass variables that are missing or empty. */
+const missingVtpassVars = () => VTPASS_VARS.filter((n) => !read(n));
+
+const vtpassConfigured = () => Boolean(config.vtpass.apiKey && config.vtpass.publicKey && config.vtpass.secretKey);
 
 /** Problems that stop the server from starting. */
 function fatalConfigErrors() {
@@ -63,19 +59,16 @@ function fatalConfigErrors() {
 /** Problems that disable a feature but let the server run. */
 function configWarnings() {
   const warnings = [];
-  if (!vtpassConfigured()) {
+  const missing = missingVtpassVars();
+  if (missing.length) {
+    // Help spot typos: show VTPass-like variable names that ARE set (names only, never values).
+    const similar = Object.keys(env).filter((k) => /vt.?pass|api.?key|public.?key|secret.?key/i.test(k) && !VTPASS_VARS.includes(k));
     warnings.push(
-      'VTPass credentials missing: set VTPASS_API_KEY + VTPASS_PUBLIC_KEY + VTPASS_SECRET_KEY, ' +
-        'or VTPASS_EMAIL + VTPASS_PASSWORD. Cable TV is disabled.',
+      `Cable TV is disabled: missing ${missing.join(', ')}.` +
+        (similar.length ? ` Found similar variables: ${similar.join(', ')} (check the names).` : ''),
     );
   }
-  if (!config.paystack.secretKey) warnings.push('PAYSTACK_SECRET_KEY missing: card/bank wallet funding is disabled');
-  if (!config.publicUrl) warnings.push('PUBLIC_URL missing: Paystack will not redirect back after payment');
   return warnings;
 }
 
-const vtpassUsesKeys = () => Boolean(config.vtpass.apiKey && config.vtpass.publicKey && config.vtpass.secretKey);
-const vtpassConfigured = () => vtpassUsesKeys() || Boolean(config.vtpass.email && config.vtpass.password);
-const paystackConfigured = () => Boolean(config.paystack.secretKey);
-
-module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, vtpassUsesKeys, paystackConfigured };
+module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, missingVtpassVars };
