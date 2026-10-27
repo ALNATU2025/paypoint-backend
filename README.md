@@ -80,7 +80,7 @@ Set `VTPASS_MODE=sandbox` and use your sandbox credentials. These smartcard numb
    - `JWT_SECRET` (a long random string)
    - `NODE_ENV=production`
    - `VTPASS_MODE=live`
-   - `VTPASS_API_KEY`, `VTPASS_PUBLIC_KEY` and `VTPASS_SECRET_KEY`, from your VTPass dashboard under Settings → API Keys. Use these exact names, and paste the values without quotes.
+   - `VTPASS_API_KEY` and `VTPASS_SECRET_KEY`, from your VTPass dashboard under Settings → API Keys. Use these exact names, and paste the values without quotes. `VTPASS_PUBLIC_KEY` is optional.
    - `ADMIN_API_KEY`, any long random text. It lets you credit user wallets until card funding is added.
 4. **VTPass account.** Your VTPass account must be funded, because VTPass debits *your* VTPass wallet for each subscription.
 5. **Deploy.** Then open `https://paypoint-backend-aj52.onrender.com/health`. It should show `"db":"connected"` and `"configured":true` for VTPass. If any key is missing, its name appears under `missing`.

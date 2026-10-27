@@ -1,6 +1,7 @@
 // Thin client for the VTPass API (https://www.vtpass.com/documentation).
 //
-// Auth with API keys: GET sends `api-key` + `public-key`; POST sends
+// Auth with API keys: POST sends `api-key` + `secret-key`. GET sends
+// `api-key` + `public-key` when a public key is configured, otherwise
 // `api-key` + `secret-key`.
 
 const { config, vtpassConfigured } = require('../config');
@@ -16,9 +17,9 @@ class VtpassNetworkError extends Error {}
 
 function authHeaders(method) {
   const v = config.vtpass;
-  return method === 'GET'
-    ? { 'api-key': v.apiKey, 'public-key': v.publicKey }
-    : { 'api-key': v.apiKey, 'secret-key': v.secretKey };
+  if (method === 'GET' && v.publicKey) return { 'api-key': v.apiKey, 'public-key': v.publicKey };
+  // POST always uses the secret key; GET falls back to it when no public key is set.
+  return { 'api-key': v.apiKey, 'secret-key': v.secretKey };
 }
 
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
