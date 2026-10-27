@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mongo:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi 2>&1 | tee ci-logs/install.txt
+      - name: Syntax check
+        run: |
+          set -o pipefail
+          for f in $(git ls-files 'src/*.js' 'src/**/*.js' 'test/*.js'); do node --check "$f" || exit 1; done 2>&1 | tee ci-logs/syntax.txt
+      - name: Test
+        env:
+          MONGODB_URI: mongodb://127.0.0.1:27017/paypoint_test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee ci-logs/test.txt
+      - name: Boot check (server starts and serves /health)
+        env:
+          NODE_ENV: production
+          MONGODB_URI: mongodb://127.0.0.1:27017/paypoint_boot
+          JWT_SECRET: ci-only-secret-ci-only-secret-0123456789
+          PORT: 4555
+        run: |
+          set -o pipefail
+          node src/server.js > ci-logs/boot.txt 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:4555/health && break; sleep 1; done | tee -a ci-logs/boot.txt
+          curl -sf localhost:4555/health
+      # Commit package-lock.json back when it was generated, so Render installs
+      # exactly what CI tested.
+      - name: Commit lockfile
+        if: github.event_name == 'push' && hashFiles('package-lock.json') != ''
+        run: |
+          if [ -n "$(git status --porcelain package-lock.json)" ]; then
+            git config user.name "paypoint-ci"
+            git config user.email "paypoint-ci@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "chore: add package-lock.json [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+      - name: Publish logs
+        if: always()
+        run: |
+          echo "sha=${GITHUB_SHA::7}" > ci-logs/summary.txt
+          cd ci-logs
+          git init -q
+          git config user.name "paypoint-ci"
+          git config user.email "paypoint-ci@users.noreply.github.com"
+          git checkout -q -b ci-logs
+          git add -A
+          git commit -q -m "CI logs for ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" ci-logs
