@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { toNaira } = require('./utils');
+const { isAdminEmail } = require('./config');
 
 // ---------------------------------------------------------------------------
 // User
@@ -30,6 +31,7 @@ userSchema.methods.toPublic = function toPublic() {
     email: this.email || '',
     balance: toNaira(this.balanceKobo),
     hasPin: Boolean(this.pinHash),
+    isAdmin: isAdminEmail(this.email),
     createdAt: this.createdAt,
   };
 };

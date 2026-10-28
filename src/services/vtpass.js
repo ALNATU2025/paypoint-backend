@@ -233,8 +233,31 @@ async function requery(requestId) {
   }
 }
 
+/** Your VTPass wallet balance (naira), or null if VTPass doesn't return it. */
+async function getBalance() {
+  try {
+    const json = await call('GET', '/balance');
+    const c = (json && (json.contents || json.content)) || {};
+    const n = Number(c.balance ?? c.Balance);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 function clearCache() {
   cache.clear();
 }
 
-module.exports = { CABLE_SERVICES, getVariations, verifyCustomer, pay, requery, interpret, clearCache, authHeaders, parseDueDate };
+module.exports = {
+  CABLE_SERVICES,
+  getVariations,
+  verifyCustomer,
+  pay,
+  requery,
+  interpret,
+  clearCache,
+  authHeaders,
+  parseDueDate,
+  getBalance,
+};

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { config } = require('./config');
+const { config, isAdminEmail } = require('./config');
 const { User } = require('./models');
 const { ApiError } = require('./utils');
 
@@ -28,13 +28,24 @@ async function requireAuth(req, res, next) {
   }
 }
 
-function requireAdmin(req, res, next) {
-  if (!config.adminApiKey) return next(new ApiError(404, 'Not found'));
-  const key = req.get('x-admin-key') || '';
-  if (key.length !== config.adminApiKey.length || key !== config.adminApiKey) {
-    return next(new ApiError(401, 'Invalid admin key'));
+/**
+ * Admin access, either:
+ *  - logged in (Bearer token) with an email listed in ADMIN_EMAILS, or
+ *  - header x-admin-key matching ADMIN_API_KEY (for scripts / curl).
+ */
+async function requireAdmin(req, res, next) {
+  const key = req.get('x-admin-key');
+  if (key !== undefined) {
+    if (!config.adminApiKey || key.length !== config.adminApiKey.length || key !== config.adminApiKey) {
+      return next(new ApiError(401, 'Invalid admin key'));
+    }
+    return next();
   }
-  next();
+  return requireAuth(req, res, (err) => {
+    if (err) return next(err);
+    if (!isAdminEmail(req.user.email)) return next(new ApiError(403, 'Admins only'));
+    next();
+  });
 }
 
 function notFound(req, res) {

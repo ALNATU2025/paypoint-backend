@@ -499,6 +499,74 @@ test('admin credit by email; phone only when unambiguous', async () => {
   assert.equal(r.status, 409, 'shared phone number is ambiguous');
 });
 
+test('admin dashboard: payonpointng@gmail.com is admin, others are not', async () => {
+  let r = await api('POST', '/api/auth/register', {
+    body: { fullName: 'Paypoint Admin', email: 'PayOnPointNG@gmail.com', phone: '0800', password: 'adminpass1' },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.data.user.isAdmin, true);
+  const adminToken = r.body.data.token;
+
+  r = await api('GET', '/api/auth/me', { token });
+  assert.equal(r.body.data.isAdmin, false);
+  r = await api('GET', '/api/admin/stats', { token });
+  assert.equal(r.status, 403, 'normal users are refused');
+
+  // Overview
+  r = await api('GET', '/api/admin/stats', { token: adminToken });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.data.users >= 3);
+  assert.ok(r.body.data.salesAll.count >= 3);
+  assert.ok(r.body.data.byProvider.dstv.amount > 0);
+  assert.equal(r.body.data.vtpass.configured, true);
+
+  // Users: search and detail
+  r = await api('GET', '/api/admin/users?q=ada', { token: adminToken });
+  const ada = r.body.data.find((u) => u.email === EMAIL);
+  assert.ok(ada, 'search finds Ada');
+  r = await api('GET', `/api/admin/users/${ada.id}`, { token: adminToken });
+  assert.equal(r.body.data.user.fullName, 'Ada Okafor');
+  assert.ok(r.body.data.transactions.length > 3);
+
+  // Credit and debit by user id
+  const before = ada.balance;
+  r = await api('POST', '/api/admin/wallet/credit', { token: adminToken, body: { userId: ada.id, amount: 1000 } });
+  assert.equal(r.body.data.balance, before + 1000);
+  r = await api('POST', '/api/admin/wallet/debit', { token: adminToken, body: { userId: ada.id, amount: 99999999 } });
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/admin/wallet/debit', { token: adminToken, body: { userId: ada.id, amount: 1000, note: 'test' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.balance, before);
+  r = await api('POST', '/api/admin/wallet/credit', { token, body: { userId: ada.id, amount: 1000 } });
+  assert.equal(r.status, 403, 'normal users cannot credit');
+
+  // All transactions with owner names; requery any user's pending payment
+  r = await api('GET', '/api/admin/transactions?type=cable&status=success', { token: adminToken });
+  assert.ok(r.body.data.length > 0);
+  assert.ok(r.body.data.every((t) => t.type === 'cable' && t.status === 'success' && t.userName));
+
+  fake.requeryResult = 'delivered';
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_PENDING, variationCode: 'dstv-padi', pin: '1234' },
+  });
+  assert.equal(r.body.data.transaction.status, 'pending', JSON.stringify(r.body));
+  const pendingId = r.body.data.transaction.id;
+  r = await api('GET', '/api/admin/transactions?status=pending', { token: adminToken });
+  assert.ok(r.body.data.some((t) => t.id === pendingId));
+  r = await api('POST', `/api/admin/transactions/${pendingId}/requery`, { token: adminToken });
+  assert.equal(r.body.data.status, 'success');
+  assert.equal(r.body.data.userName, 'Ada Okafor');
+
+  // Unlock a PIN lockout
+  const { User } = require('../src/models');
+  await User.updateOne({ email: EMAIL }, { pinLockedUntil: new Date(Date.now() + 600000) });
+  r = await api('GET', `/api/admin/users/${ada.id}`, { token: adminToken });
+  assert.equal(r.body.data.user.pinLocked, true);
+  r = await api('POST', `/api/admin/users/${ada.id}/unlock-pin`, { token: adminToken });
+  assert.equal(r.body.data.pinLocked, false);
+});
+
 test('admin routes need the key', async () => {
   const r = await api('POST', '/api/admin/wallet/credit', { body: { phone: PHONE, amount: 10 } });
   assert.equal(r.status, 401);
