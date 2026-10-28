@@ -178,12 +178,13 @@ async function api(method, path, { token, body, headers = {}, raw } = {}) {
 }
 
 let token;
-const PHONE = '08031234567';
+const PHONE = '+2348031234567';
+const EMAIL = 'ada@example.com';
 
 async function credit(amount) {
   const r = await api('POST', '/api/admin/wallet/credit', {
     headers: { 'x-admin-key': 'admin-key' },
-    body: { phone: PHONE, amount },
+    body: { email: EMAIL, amount },
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return r.body.data.balance;
@@ -201,32 +202,76 @@ test('health reports configuration', async () => {
 });
 
 test('register validates and creates an account', async () => {
-  let r = await api('POST', '/api/auth/register', { body: { fullName: 'Ada', phone: '123', password: 'secret1' } });
+  let r = await api('POST', '/api/auth/register', { body: { fullName: 'Ada Okafor', phone: '123', password: 'secret1' } });
+  assert.equal(r.status, 400, 'email is required');
+  r = await api('POST', '/api/auth/register', {
+    body: { fullName: 'Ada Okafor', email: 'not-an-email', phone: '123', password: 'secret1' },
+  });
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/auth/register', {
+    body: { fullName: 'Ada Okafor', email: EMAIL, phone: 'no digits', password: 'secret1' },
+  });
   assert.equal(r.status, 400);
 
   r = await api('POST', '/api/auth/register', {
-    body: { fullName: 'Ada Okafor', phone: '+234 803 123 4567', email: 'ada@example.com', password: 'secret1' },
+    body: { fullName: 'Ada Okafor', phone: '+234 803 123 4567', email: ' Ada@Example.com ', password: 'secret1' },
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.data.user.phone, PHONE);
+  assert.equal(r.body.data.user.email, EMAIL);
   assert.equal(r.body.data.user.balance, 0);
   assert.equal(r.body.data.user.hasPin, false);
   token = r.body.data.token;
 
-  r = await api('POST', '/api/auth/register', { body: { fullName: 'Ada Okafor', phone: PHONE, password: 'secret1' } });
-  assert.equal(r.status, 409);
+  r = await api('POST', '/api/auth/register', {
+    body: { fullName: 'Ada Again', email: 'ADA@example.com', phone: '0800', password: 'secret1' },
+  });
+  assert.equal(r.status, 409, 'email must be unique');
 });
 
-test('login and me', async () => {
-  let r = await api('POST', '/api/auth/login', { body: { phone: PHONE, password: 'wrong' } });
+test('phone numbers: any country, any length, and may be shared', async () => {
+  for (const [phone, stored] of [
+    ['+44 20 7946 0958', '+442079460958'],
+    ['12', '12'],
+    ['(555) 010-9999', '5550109999'],
+    ['+1-202-555-0143', '+12025550143'],
+  ]) {
+    const r = await api('POST', '/api/auth/register', {
+      body: { fullName: 'Phone Tester', email: `p${stored.replace('+', '')}@example.com`, phone, password: 'secret1' },
+    });
+    assert.equal(r.status, 201, `${phone}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.data.user.phone, stored);
+  }
+  const r = await api('POST', '/api/auth/register', {
+    body: { fullName: 'Same Phone', email: 'samephone@example.com', phone: '12', password: 'secret1' },
+  });
+  assert.equal(r.status, 201, 'two accounts can share a phone number');
+});
+
+test('login with email and password', async () => {
+  let r = await api('POST', '/api/auth/login', { body: { email: EMAIL, password: 'wrong' } });
   assert.equal(r.status, 401);
-  r = await api('POST', '/api/auth/login', { body: { phone: '2348031234567', password: 'secret1' } });
+  assert.equal(r.body.message, 'Incorrect email or password');
+  r = await api('POST', '/api/auth/login', { body: { email: 'nobody@example.com', password: 'secret1' } });
+  assert.equal(r.status, 401);
+  r = await api('POST', '/api/auth/login', { body: { phone: PHONE, password: 'secret1' } });
+  assert.equal(r.status, 400, 'phone login is gone');
+  r = await api('POST', '/api/auth/login', { body: { email: ' ADA@example.com ', password: 'secret1' } });
   assert.equal(r.status, 200);
   token = r.body.data.token;
   r = await api('GET', '/api/auth/me', { token });
   assert.equal(r.body.data.fullName, 'Ada Okafor');
   r = await api('GET', '/api/auth/me', { token: 'bad' });
   assert.equal(r.status, 401);
+});
+
+test('older phone-only accounts can still log in with their phone', async () => {
+  const bcrypt = require('bcryptjs');
+  const { User } = require('../src/models');
+  await User.create({ fullName: 'Legacy User', phone: '08077776666', passwordHash: await bcrypt.hash('oldpass1', 10) });
+  const r = await api('POST', '/api/auth/login', { body: { email: '08077776666', password: 'oldpass1' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.user.fullName, 'Legacy User');
 });
 
 test('packages come from VTPass (both spellings) and are sorted', async () => {
@@ -431,13 +476,27 @@ test('transactions list is scoped to the user', async () => {
   assert.ok(r.body.data.every((t) => t.type === 'cable'));
 
   const other = await api('POST', '/api/auth/register', {
-    body: { fullName: 'Other User', phone: '08099998888', password: 'secret1' },
+    body: { fullName: 'Other User', email: 'other@example.com', phone: '08099998888', password: 'secret1' },
   });
   r = await api('GET', '/api/transactions', { token: other.body.data.token });
   assert.equal(r.body.data.length, 0);
   const someone = (await api('GET', '/api/transactions', { token })).body.data[0].id;
   r = await api('GET', `/api/transactions/${someone}`, { token: other.body.data.token });
   assert.equal(r.status, 404);
+});
+
+test('admin credit by email; phone only when unambiguous', async () => {
+  let r = await api('POST', '/api/admin/wallet/credit', {
+    headers: { 'x-admin-key': 'admin-key' },
+    body: { email: 'other@example.com', amount: 100 },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.balance, 100);
+  r = await api('POST', '/api/admin/wallet/credit', {
+    headers: { 'x-admin-key': 'admin-key' },
+    body: { phone: '12', amount: 100 },
+  });
+  assert.equal(r.status, 409, 'shared phone number is ambiguous');
 });
 
 test('admin routes need the key', async () => {

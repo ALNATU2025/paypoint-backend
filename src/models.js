@@ -8,8 +8,10 @@ const { toNaira } = require('./utils');
 const userSchema = new mongoose.Schema(
   {
     fullName: { type: String, required: true, trim: true, maxlength: 80 },
-    phone: { type: String, required: true, unique: true, index: true },
-    email: { type: String, trim: true, lowercase: true, maxlength: 120 },
+    // Email is the login. Older phone-only accounts have none (sparse index).
+    email: { type: String, trim: true, lowercase: true, maxlength: 120, unique: true, sparse: true },
+    // Any format, any country; not unique.
+    phone: { type: String, required: true, index: true },
     passwordHash: { type: String, required: true },
     pinHash: { type: String, default: null },
     pinFailedAttempts: { type: Number, default: 0 },

@@ -1,7 +1,7 @@
 const express = require('express');
 const { Transaction, User } = require('../models');
 const { requireAuth, requireAdmin } = require('../middleware');
-const { ApiError, ah, toKobo, toNaira, normalizePhone, randomRef } = require('../utils');
+const { ApiError, ah, toKobo, toNaira, normalizePhone, normalizeEmail, isEmail, randomRef } = require('../utils');
 
 // ---------------------------------------------------------------------------
 // Transactions
@@ -43,17 +43,29 @@ transactions.get(
 const admin = express.Router();
 admin.use(requireAdmin);
 
-// POST /api/admin/wallet/credit { phone, amount, note? }
+// POST /api/admin/wallet/credit { email (or phone), amount, note? }
 admin.post(
   '/wallet/credit',
   ah(async (req, res) => {
-    const phone = normalizePhone((req.body || {}).phone);
-    const amount = Number((req.body || {}).amount);
-    if (!phone) throw new ApiError(400, 'Enter a valid phone number');
+    const body = req.body || {};
+    const amount = Number(body.amount);
     if (!Number.isFinite(amount) || amount <= 0 || amount > 5000000) throw new ApiError(400, 'Enter a valid amount');
+    let filter;
+    if (body.email) {
+      const email = normalizeEmail(body.email);
+      if (!isEmail(email)) throw new ApiError(400, 'Enter a valid email address');
+      filter = { email };
+    } else {
+      const phone = normalizePhone(body.phone);
+      if (!phone) throw new ApiError(400, 'Send the user\'s email (or phone)');
+      if ((await User.countDocuments({ phone })) > 1) {
+        throw new ApiError(409, 'Several accounts use that phone number. Use their email instead.');
+      }
+      filter = { phone };
+    }
     const amountKobo = toKobo(amount);
-    const user = await User.findOneAndUpdate({ phone }, { $inc: { balanceKobo: amountKobo } }, { new: true });
-    if (!user) throw new ApiError(404, 'No account with that phone number');
+    const user = await User.findOneAndUpdate(filter, { $inc: { balanceKobo: amountKobo } }, { new: true });
+    if (!user) throw new ApiError(404, 'No account found');
     const tx = await Transaction.create({
       user: user._id,
       type: 'funding',
