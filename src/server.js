@@ -12,6 +12,12 @@ async function main() {
 
   await mongoose.connect(config.mongoUri, { serverSelectionTimeoutMS: 15000 });
   console.log('[db] connected');
+  try {
+    // Apply index changes (email unique for login, phone no longer unique).
+    await require('./models').User.syncIndexes();
+  } catch (e) {
+    console.error('[db] index sync failed:', e.message);
+  }
 
   const app = createApp();
   const server = app.listen(config.port, () => {

@@ -1,7 +1,7 @@
 # Paypoint API
 
 This is the backend for the Paypoint mobile app. It handles:
-- user accounts with a 4-digit transaction PIN
+- user accounts (email + password login) with a 4-digit transaction PIN
 - a naira wallet (credited by an admin for now; card funding comes later)
 - **DStv, GOtv and StarTimes** subscriptions through **VTPass**
 
@@ -33,8 +33,8 @@ Send `Authorization: Bearer <token>` on every route except register, login and h
 | Method | Path | Body | Notes |
 |---|---|---|---|
 | GET | `/health` | | Database state, and whether VTPass is configured (`missing` lists any unset key names) |
-| POST | `/api/auth/register` | `fullName, phone, email?, password` | Returns `{ token, user }` |
-| POST | `/api/auth/login` | `phone, password` | Returns `{ token, user }` |
+| POST | `/api/auth/register` | `fullName, email, phone, password` | Returns `{ token, user }`. Email must be unique. Phone can be any format and length |
+| POST | `/api/auth/login` | `email, password` | Returns `{ token, user }` |
 | GET | `/api/auth/me` | | The user, including wallet `balance` and `hasPin` |
 | PUT | `/api/auth/pin` | `pin, currentPin?` | Sets or changes the 4-digit PIN |
 | GET | `/api/cable/providers` | | dstv, gotv, startimes |
@@ -45,7 +45,7 @@ Send `Authorization: Bearer <token>` on every route except register, login and h
 | GET | `/api/wallet` | | `{ balance }` |
 | GET | `/api/transactions` | `?type=cable\|funding&limit=` | Newest first |
 | GET | `/api/transactions/:id` | | |
-| POST | `/api/admin/wallet/credit` | `phone, amount, note?` | Header `x-admin-key`. Only active when `ADMIN_API_KEY` is set |
+| POST | `/api/admin/wallet/credit` | `email` (or `phone`), `amount`, `note?` | Header `x-admin-key`. Only active when `ADMIN_API_KEY` is set |
 
 - **`months`** (1–12) applies to DStv and GOtv. StarTimes is always 1 month.
 - **Change vs renew** follows the VTPass TV docs:
@@ -89,7 +89,7 @@ Set `VTPASS_MODE=sandbox` and use your sandbox credentials. These smartcard numb
 ```bash
 curl -X POST https://paypoint-backend-aj52.onrender.com/api/admin/wallet/credit \
   -H "x-admin-key: YOUR_ADMIN_API_KEY" -H "Content-Type: application/json" \
-  -d '{"phone":"08031234567","amount":5000,"note":"Cash deposit"}'
+  -d '{"email":"customer@example.com","amount":5000,"note":"Cash deposit"}'
 ```
 
 On the free plan, Render puts the service to sleep after 15 minutes without traffic, and the first request then takes about 30–50 seconds. The app waits long enough for that.

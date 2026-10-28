@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
 const { User } = require('../models');
 const { signToken, requireAuth } = require('../middleware');
-const { ApiError, ah, normalizePhone, isPin, requireFields } = require('../utils');
+const { ApiError, ah, normalizePhone, normalizeEmail, isEmail, isPin, requireFields } = require('../utils');
 
 const router = express.Router();
 
@@ -16,48 +16,53 @@ const limiter = rateLimit({
   message: { success: false, message: 'Too many attempts. Please wait a few minutes and try again.' },
 });
 
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-// POST /api/auth/register { fullName, phone, email?, password }
+// POST /api/auth/register { fullName, email, phone, password }
 router.post(
   '/register',
   limiter,
   ah(async (req, res) => {
     const body = req.body || {};
-    requireFields(body, ['fullName', 'phone', 'password']);
+    requireFields(body, ['fullName', 'email', 'phone', 'password']);
     const fullName = String(body.fullName).trim();
+    const email = normalizeEmail(body.email);
     const phone = normalizePhone(body.phone);
-    const email = body.email ? String(body.email).trim().toLowerCase() : '';
     const password = String(body.password);
 
     if (fullName.length < 3) throw new ApiError(400, 'Enter your full name');
-    if (!phone) throw new ApiError(400, 'Enter a valid Nigerian phone number');
-    if (email && !EMAIL_RE.test(email)) throw new ApiError(400, 'Enter a valid email address');
+    if (!isEmail(email)) throw new ApiError(400, 'Enter a valid email address');
+    if (!phone) throw new ApiError(400, 'Enter your phone number');
     if (password.length < 6) throw new ApiError(400, 'Password must be at least 6 characters');
 
-    if (await User.exists({ phone })) throw new ApiError(409, 'An account with this phone number already exists');
+    if (await User.exists({ email })) throw new ApiError(409, 'An account with this email already exists. Log in instead.');
 
     const user = await User.create({
       fullName,
+      email,
       phone,
-      email: email || undefined,
       passwordHash: await bcrypt.hash(password, 10),
     });
     res.status(201).json({ success: true, data: { token: signToken(user), user: user.toPublic() } });
   }),
 );
 
-// POST /api/auth/login { phone, password }
+// POST /api/auth/login { email, password }
+// (Accounts created before email login can still use their phone number in `email`.)
 router.post(
   '/login',
   limiter,
   ah(async (req, res) => {
     const body = req.body || {};
-    requireFields(body, ['phone', 'password']);
-    const phone = normalizePhone(body.phone);
-    const user = phone ? await User.findOne({ phone }) : null;
+    requireFields(body, ['email', 'password']);
+    const id = String(body.email).trim();
+    let user = null;
+    if (id.includes('@')) {
+      user = await User.findOne({ email: normalizeEmail(id) });
+    } else {
+      const phone = normalizePhone(id);
+      user = phone ? await User.findOne({ phone, email: { $in: [null, ''] } }) : null;
+    }
     const ok = user ? await bcrypt.compare(String(body.password), user.passwordHash) : false;
-    if (!ok) throw new ApiError(401, 'Incorrect phone number or password');
+    if (!ok) throw new ApiError(401, 'Incorrect email or password');
     res.json({ success: true, data: { token: signToken(user), user: user.toPublic() } });
   }),
 );

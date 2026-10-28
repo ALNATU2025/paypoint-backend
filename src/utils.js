@@ -16,15 +16,21 @@ const toKobo = (naira) => Math.round(Number(naira) * 100);
 const toNaira = (kobo) => Math.round(Number(kobo)) / 100;
 
 /**
- * Nigerian phone numbers in local 11-digit form: 08031234567.
- * Accepts +234…, 234…, 0… and 10-digit forms. Returns null if invalid.
+ * Any phone number, any country, any length: keeps an optional leading "+"
+ * and the digits, dropping spaces, dashes, dots and brackets.
+ * "+234 (803) 123-4567" → "+2348031234567". Returns null if there are no digits.
  */
 function normalizePhone(input) {
-  let d = String(input || '').replace(/\D/g, '');
-  if (d.startsWith('234')) d = '0' + d.slice(3);
-  if (d.length === 10 && !d.startsWith('0')) d = '0' + d;
-  return /^0[789][01]\d{8}$/.test(d) ? d : null;
+  const raw = String(input || '').trim();
+  const plus = raw.startsWith('+') ? '+' : '';
+  const digits = raw.replace(/\D/g, '');
+  if (!digits || digits.length > 20) return null;
+  return plus + digits;
 }
+
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const normalizeEmail = (v) => String(v || '').trim().toLowerCase();
+const isEmail = (v) => EMAIL_RE.test(v);
 
 /**
  * VTPass request_id: the first 12 characters must be the current date/time
@@ -57,4 +63,16 @@ function requireFields(body, fields) {
   if (missing.length) throw new ApiError(400, `Missing: ${missing.join(', ')}`);
 }
 
-module.exports = { ApiError, ah, toKobo, toNaira, normalizePhone, vtpassRequestId, randomRef, isPin, requireFields };
+module.exports = {
+  ApiError,
+  ah,
+  toKobo,
+  toNaira,
+  normalizePhone,
+  normalizeEmail,
+  isEmail,
+  vtpassRequestId,
+  randomRef,
+  isPin,
+  requireFields,
+};
