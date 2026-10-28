@@ -1,12 +1,15 @@
-// Admin API. Access: logged in with an ADMIN_EMAILS account, or x-admin-key.
+// Admin API. Access: logged in with an ADMIN_EMAILS / SUPER_ADMIN_EMAILS
+// account, or x-admin-key. Super admin accounts (and everything they do) are
+// left out of every list and total unless the caller is a super admin.
 
 const express = require('express');
 const mongoose = require('mongoose');
-const { config, vtpassConfigured } = require('../config');
+const { config, vtpassConfigured, isSuperAdminEmail } = require('../config');
 const { Transaction, User } = require('../models');
 const { requireAdmin } = require('../middleware');
 const vtpass = require('../services/vtpass');
 const wallet = require('../services/wallet');
+const platform = require('../services/platform');
 const { ApiError, ah, toKobo, toNaira, normalizePhone, normalizeEmail, isEmail, randomRef } = require('../utils');
 
 const router = express.Router();
@@ -18,6 +21,27 @@ function startOfTodayLagos() {
   // Lagos is UTC+1 all year.
   const now = new Date(Date.now() + 60 * 60 * 1000);
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - 60 * 60 * 1000);
+}
+
+/** Filter that hides super admin accounts from admins. */
+const visibleUsers = (req) => (req.isSuper ? {} : { email: { $nin: config.superAdminEmails } });
+
+/** Ids of super admin accounts, hidden from admins (empty for super admins). */
+async function hiddenUserIds(req) {
+  if (req.isSuper) return [];
+  return User.find({ email: { $in: config.superAdminEmails } }).distinct('_id');
+}
+
+const isHidden = (req, user) => !req.isSuper && isSuperAdminEmail(user.email);
+
+// VTPass balance, cached briefly because the dashboard refreshes every few seconds.
+let providerBalance = { at: 0, value: null };
+async function cachedProviderBalance() {
+  if (!vtpassConfigured()) return null;
+  if (Date.now() - providerBalance.at > 30000) {
+    providerBalance = { at: Date.now(), value: await vtpass.getBalance() };
+  }
+  return providerBalance.value;
 }
 
 /** Admin view of a user (adds counts that normal users don't see). */
@@ -68,27 +92,32 @@ router.get(
   '/stats',
   ah(async (req, res) => {
     const today = startOfTodayLagos();
+    const userFilter = visibleUsers(req);
+    const hidden = await hiddenUserIds(req);
+    const notHidden = { user: { $nin: hidden } };
     const sumCable = async (match) => {
       const [r] = await Transaction.aggregate([
-        { $match: { type: 'cable', status: 'success', ...match } },
+        { $match: { type: 'cable', status: 'success', ...notHidden, ...match } },
         { $group: { _id: null, amount: { $sum: '$amountKobo' }, count: { $sum: 1 } } },
       ]);
       return { amount: toNaira(r ? r.amount : 0), count: r ? r.count : 0 };
     };
-    const [users, newUsersToday, [walletSum], salesToday, salesAll, pending, failedToday, byProvider, vtpassBalance] =
+    const [users, newUsersToday, [walletSum], salesToday, salesAll, pending, failedToday, byProvider, vtpassBalance, p] =
       await Promise.all([
-        User.countDocuments(),
-        User.countDocuments({ createdAt: { $gte: today } }),
-        User.aggregate([{ $group: { _id: null, total: { $sum: '$balanceKobo' } } }]),
+        User.countDocuments(userFilter),
+        User.countDocuments({ ...userFilter, createdAt: { $gte: today } }),
+        User.aggregate([{ $match: userFilter }, { $group: { _id: null, total: { $sum: '$balanceKobo' } } }]),
         sumCable({ createdAt: { $gte: today } }),
         sumCable({}),
-        Transaction.countDocuments({ type: 'cable', status: 'pending' }),
-        Transaction.countDocuments({ type: 'cable', status: 'failed', createdAt: { $gte: today } }),
+        Transaction.countDocuments({ type: 'cable', status: 'pending', ...notHidden }),
+        Transaction.countDocuments({ type: 'cable', status: 'failed', ...notHidden, createdAt: { $gte: today } }),
         Transaction.aggregate([
-          { $match: { type: 'cable', status: 'success' } },
+          { $match: { type: 'cable', status: 'success', ...notHidden } },
           { $group: { _id: '$serviceID', amount: { $sum: '$amountKobo' }, count: { $sum: 1 } } },
         ]),
-        vtpassConfigured() ? vtpass.getBalance() : Promise.resolve(null),
+        // The VTPass balance is for super admins; admins see the Paypoint wallet.
+        req.isSuper ? cachedProviderBalance() : Promise.resolve(null),
+        platform.get(),
       ]);
     res.json({
       success: true,
@@ -102,6 +131,9 @@ router.get(
         failedToday,
         byProvider: Object.fromEntries(byProvider.map((p) => [p._id, { amount: toNaira(p.amount), count: p.count }])),
         vtpass: { mode: config.vtpass.mode, configured: vtpassConfigured(), balance: vtpassBalance },
+        ...platform.summary(p, { isSuper: Boolean(req.isSuper) }),
+        isSuper: Boolean(req.isSuper),
+        serverTime: new Date().toISOString(),
       },
     });
   }),
@@ -113,7 +145,7 @@ router.get(
   ah(async (req, res) => {
     const q = String(req.query.q || '').trim();
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-    const filter = q
+    const search = q
       ? {
           $or: [
             { fullName: { $regex: escapeRegex(q), $options: 'i' } },
@@ -122,7 +154,7 @@ router.get(
           ],
         }
       : {};
-    const users = await User.find(filter).sort({ createdAt: -1 }).limit(limit);
+    const users = await User.find({ $and: [search, visibleUsers(req)] }).sort({ createdAt: -1 }).limit(limit);
     res.json({ success: true, data: users.map(adminUser) });
   }),
 );
@@ -133,7 +165,7 @@ router.get(
   ah(async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(404, 'User not found');
     const user = await User.findById(req.params.id);
-    if (!user) throw new ApiError(404, 'User not found');
+    if (!user || isHidden(req, user)) throw new ApiError(404, 'User not found');
     const txs = await Transaction.find({ user: user._id }).sort({ createdAt: -1 }).limit(50);
     res.json({ success: true, data: { user: adminUser(user), transactions: txs.map((t) => t.toPublic()) } });
   }),
@@ -144,8 +176,8 @@ router.post(
   '/users/:id/unlock-pin',
   ah(async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(404, 'User not found');
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    const user = await User.findOneAndUpdate(
+      { $and: [{ _id: req.params.id }, visibleUsers(req)] },
       { pinFailedAttempts: 0, pinLockedUntil: null },
       { new: true },
     );
@@ -162,7 +194,11 @@ router.post(
     const amount = parseAmount(body.amount);
     const filter = await findTargetUser(body);
     const amountKobo = toKobo(amount);
-    const user = await User.findOneAndUpdate(filter, { $inc: { balanceKobo: amountKobo } }, { new: true });
+    const user = await User.findOneAndUpdate(
+      { $and: [filter, visibleUsers(req)] },
+      { $inc: { balanceKobo: amountKobo } },
+      { new: true },
+    );
     if (!user) throw new ApiError(404, 'No account found');
     const tx = await Transaction.create({
       user: user._id,
@@ -185,7 +221,7 @@ router.post(
     const amount = parseAmount(body.amount);
     const filter = await findTargetUser(body);
     const amountKobo = toKobo(amount);
-    const exists = await User.findOne(filter);
+    const exists = await User.findOne({ $and: [filter, visibleUsers(req)] });
     if (!exists) throw new ApiError(404, 'No account found');
     const user = await User.findOneAndUpdate(
       { _id: exists._id, balanceKobo: { $gte: amountKobo } },
@@ -213,6 +249,8 @@ router.get(
     const q = {};
     if (['pending', 'success', 'failed'].includes(req.query.status)) q.status = req.query.status;
     if (['cable', 'funding'].includes(req.query.type)) q.type = req.query.type;
+    const hidden = await hiddenUserIds(req);
+    if (hidden.length) q.user = { $nin: hidden };
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
     const list = await Transaction.find(q).sort({ createdAt: -1 }).limit(limit);
     res.json({ success: true, data: await withOwners(list) });
@@ -225,10 +263,53 @@ router.post(
   ah(async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.id)) throw new ApiError(404, 'Transaction not found');
     let tx = await Transaction.findOne({ _id: req.params.id, type: 'cable' });
-    if (!tx) throw new ApiError(404, 'Transaction not found');
+    if (!tx || (await hiddenUserIds(req)).some((id) => String(id) === String(tx.user))) {
+      throw new ApiError(404, 'Transaction not found');
+    }
     if (tx.status === 'pending') tx = await wallet.settleCable(tx, await vtpass.requery(tx.requestId));
     const [row] = await withOwners([tx]);
     res.json({ success: true, data: row });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Paypoint wallet and Revenue wallet
+// ---------------------------------------------------------------------------
+
+// GET /api/admin/wallets?wallet=pool|adminRevenue[|superRevenue]&limit=
+router.get(
+  '/wallets',
+  ah(async (req, res) => {
+    const p = await platform.get();
+    const limit = parseInt(req.query.limit, 10) || 50;
+    res.json({
+      success: true,
+      data: {
+        ...platform.summary(p, { isSuper: Boolean(req.isSuper) }),
+        ledger: await platform.ledger({ isSuper: Boolean(req.isSuper), wallet: req.query.wallet, limit }),
+      },
+    });
+  }),
+);
+
+// POST /api/admin/revenue/withdraw { amount, to: "pool" | "main" }
+//   pool: into the Paypoint wallet; main: into the admin's own app wallet.
+router.post(
+  '/revenue/withdraw',
+  ah(async (req, res) => {
+    if (req.isSuper) throw new ApiError(403, 'Super admin revenue is kept as a record and cannot be withdrawn');
+    const body = req.body || {};
+    const amountKobo = toKobo(parseAmount(body.amount));
+    const out = await platform.withdrawAdminRevenue(amountKobo, String(body.to || ''), req.user || null);
+    const p = await platform.get();
+    res.json({
+      success: true,
+      message: out.to === 'pool' ? 'Moved to Paypoint wallet' : 'Moved to your wallet',
+      data: {
+        ...platform.summary(p, { isSuper: false }),
+        ...(out.user ? { balance: toNaira(out.user.balanceKobo), transaction: out.transaction.toPublic() } : {}),
+      },
+    });
   }),
 );
 

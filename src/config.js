@@ -6,6 +6,12 @@ const env = process.env;
 /** Read an env var, trimming whitespace and stray quotes from copy-paste. */
 const read = (name) => String(env[name] || '').trim().replace(/^["']|["']$/g, '').trim();
 
+/** Parse a percentage env var (0-100), falling back to a default. */
+const percent = (v, fallback) => {
+  const n = Number(v);
+  return v !== '' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : fallback;
+};
+
 const vtpassMode = read('VTPASS_MODE').toLowerCase() === 'sandbox' ? 'sandbox' : 'live';
 
 const config = {
@@ -22,6 +28,16 @@ const config = {
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean),
+
+  // Super admin(s): fund the Paypoint wallet and see everything. Hidden from admins.
+  superAdminEmails: (read('SUPER_ADMIN_EMAILS') || 'alusinebarrie578@gmail.com')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+
+  // Revenue share of every successful payment (percent of the bouquet amount).
+  adminRevenuePercent: percent(read('ADMIN_REVENUE_PERCENT'), 1.3),
+  superAdminRevenuePercent: percent(read('SUPER_ADMIN_REVENUE_PERCENT'), 0.5),
 
   // Optional key for calling /api/admin routes from scripts (header x-admin-key).
   adminApiKey: read('ADMIN_API_KEY'),
@@ -46,6 +62,9 @@ config.isProduction = config.env === 'production';
 
 /** True when this email belongs to an admin. */
 const isAdminEmail = (email) => Boolean(email) && config.adminEmails.includes(String(email).toLowerCase());
+
+/** True when this email belongs to a super admin. */
+const isSuperAdminEmail = (email) => Boolean(email) && config.superAdminEmails.includes(String(email).toLowerCase());
 
 // Required. VTPASS_PUBLIC_KEY is optional: without it, GET requests are
 // signed with the secret key instead.
@@ -84,4 +103,4 @@ function configWarnings() {
   return warnings;
 }
 
-module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, missingVtpassVars, isAdminEmail };
+module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, missingVtpassVars, isAdminEmail, isSuperAdminEmail };

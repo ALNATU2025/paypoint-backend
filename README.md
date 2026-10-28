@@ -53,6 +53,16 @@ Send `Authorization: Bearer <token>` on every route except register, login and h
 | POST | `/api/admin/wallet/debit` | `userId` / `email` / `phone`, `amount`, `note?` | **Admin.** Correct a wallet (never goes below ₦0) |
 | GET | `/api/admin/transactions` | `?status=&type=` | **Admin.** All users' transactions |
 | POST | `/api/admin/transactions/:id/requery` | | **Admin.** Settle any pending payment |
+| GET | `/api/admin/wallets` | `?wallet=pool\|adminRevenue&limit=` | **Admin.** Paypoint wallet, Revenue wallet and their history |
+| POST | `/api/admin/revenue/withdraw` | `amount, to: "pool" \| "main"` | **Admin.** Move revenue into the Paypoint wallet or the admin's own app wallet |
+| POST | `/api/super/pool/credit` | `amount, note?` | **Super admin.** Fund the Paypoint wallet |
+| POST | `/api/super/pool/debit` | `amount, note?` | **Super admin.** Correct the Paypoint wallet |
+
+**Paypoint wallet (pool).** Every cable payment is also held from the Paypoint wallet. If it can't cover a payment, the payment is refused (HTTP 503, `code: SERVICE_UNAVAILABLE`) even when the user has money; the user's balance is untouched. A failed payment returns the hold. Only the super admin can fund it.
+
+**Revenue.** Each successful payment credits 1.3% of the bouquet amount to the admin's Revenue wallet and 0.5% to the super admin's (`ADMIN_REVENUE_PERCENT`, `SUPER_ADMIN_REVENUE_PERCENT`). The admin can withdraw to the Paypoint wallet or their own app wallet; the super admin's revenue is a record only.
+
+**Super admin.** Accounts in `SUPER_ADMIN_EMAILS` (default `alusinebarrie578@gmail.com`) see everything, including the VTPass balance. Admins never see super admin accounts, their payments, who funded the Paypoint wallet, or super admin revenue.
 
 **Admin access.** Log in with an email listed in `ADMIN_EMAILS` (default `payonpointng@gmail.com`; separate several with commas), and the app shows the Admin dashboard. Scripts can use the header `x-admin-key: <ADMIN_API_KEY>` instead.
 

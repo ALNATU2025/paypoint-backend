@@ -3,6 +3,7 @@
 
 const { User, Transaction } = require('../models');
 const { ApiError } = require('../utils');
+const platform = require('./platform');
 
 /** Debit if (and only if) the balance covers it. Throws 402 otherwise. */
 async function debit(userId, amountKobo) {
@@ -16,8 +17,10 @@ async function debit(userId, amountKobo) {
 }
 
 /**
- * Move a pending cable transaction to its final state. Refunds exactly once
- * when it fails. Returns the up-to-date transaction.
+ * Move a pending cable transaction to its final state, exactly once:
+ *  - failed:  refund the user and return the hold to the Paypoint wallet
+ *  - success: credit the admin and super admin Revenue wallets
+ * Returns the up-to-date transaction.
  */
 async function settleCable(tx, result) {
   const update = {
@@ -40,7 +43,12 @@ async function settleCable(tx, result) {
 
   if (result.status === 'failed') {
     await User.updateOne({ _id: settled.user }, { $inc: { balanceKobo: settled.amountKobo } });
+    await platform.releasePayment(settled);
+    return settled;
   }
+  const share = await platform.creditRevenue(settled);
+  settled.adminRevenueKobo = share.admin;
+  settled.superRevenueKobo = share.super;
   return settled;
 }
 

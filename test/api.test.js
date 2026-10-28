@@ -178,6 +178,9 @@ async function api(method, path, { token, body, headers = {}, raw } = {}) {
 }
 
 let token;
+let adminToken;
+let superToken;
+const SUPER_EMAIL = 'alusinebarrie578@gmail.com';
 const PHONE = '+2348031234567';
 const EMAIL = 'ada@example.com';
 
@@ -324,6 +327,53 @@ test('set and change PIN', async () => {
   assert.equal(r.body.data.hasPin, true);
   r = await api('PUT', '/api/auth/pin', { token, body: { pin: '4321', currentPin: '0000' } });
   assert.equal(r.status, 401);
+});
+
+test('an empty Paypoint wallet blocks payments even when the user has money', async () => {
+  assert.equal(await credit(4400), 4400);
+  const before = fake.pays.length;
+  let r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, variationCode: 'dstv-padi', pin: '1234' },
+  });
+  assert.equal(r.status, 503, JSON.stringify(r.body));
+  assert.equal(r.body.code, 'SERVICE_UNAVAILABLE');
+  assert.equal(fake.pays.length, before, 'VTPass is never called');
+  r = await api('GET', '/api/auth/me', { token });
+  assert.equal(r.body.data.balance, 4400, 'user balance untouched');
+  r = await api('POST', '/api/admin/wallet/debit', {
+    headers: { 'x-admin-key': 'admin-key' },
+    body: { email: EMAIL, amount: 4400 },
+  });
+  assert.equal(r.status, 200);
+});
+
+test('super admin funds the Paypoint wallet', async () => {
+  let r = await api('POST', '/api/auth/register', {
+    body: { fullName: 'Super Admin', email: SUPER_EMAIL, phone: '0700', password: 'superpass1' },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.data.user.isSuperAdmin, true);
+  assert.equal(r.body.data.user.isAdmin, true);
+  superToken = r.body.data.token;
+
+  r = await api('POST', '/api/super/pool/credit', { token, body: { amount: 1000 } });
+  assert.equal(r.status, 403, 'normal users cannot fund it');
+  r = await api('POST', '/api/super/pool/credit', { headers: { 'x-admin-key': 'admin-key' }, body: { amount: 1000 } });
+  assert.equal(r.status, 401, 'the API key cannot fund it');
+  r = await api('POST', '/api/super/pool/credit', { token: superToken, body: { amount: 0 } });
+  assert.equal(r.status, 400);
+
+  r = await api('POST', '/api/super/pool/credit', { token: superToken, body: { amount: 1000000, note: 'Opening float' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.paypointWallet.balance, 1000000);
+  assert.equal(r.body.data.ledger[0].kind, 'topup');
+  assert.equal(r.body.data.ledger[0].by, 'Super Admin');
+
+  r = await api('POST', '/api/super/pool/debit', { token: superToken, body: { amount: 2000000 } });
+  assert.equal(r.status, 400, 'cannot go below zero');
+  r = await api('GET', '/api/auth/me', { token });
+  assert.equal(r.body.data.isSuperAdmin, false);
 });
 
 test('insufficient balance is rejected without calling VTPass', async () => {
@@ -505,7 +555,8 @@ test('admin dashboard: payonpointng@gmail.com is admin, others are not', async (
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.data.user.isAdmin, true);
-  const adminToken = r.body.data.token;
+  assert.equal(r.body.data.user.isSuperAdmin, false);
+  adminToken = r.body.data.token;
 
   r = await api('GET', '/api/auth/me', { token });
   assert.equal(r.body.data.isAdmin, false);
@@ -565,6 +616,135 @@ test('admin dashboard: payonpointng@gmail.com is admin, others are not', async (
   assert.equal(r.body.data.user.pinLocked, true);
   r = await api('POST', `/api/admin/users/${ada.id}/unlock-pin`, { token: adminToken });
   assert.equal(r.body.data.pinLocked, false);
+});
+
+async function wallets(t = superToken) {
+  const r = await api('GET', '/api/admin/wallets', { token: t });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body.data;
+}
+
+async function pay(t, billersCode, variationCode = 'dstv-padi') {
+  return api('POST', '/api/cable/pay', { token: t, body: { serviceID: 'dstv', billersCode, variationCode, pin: '1234' } });
+}
+
+test('payments use the Paypoint wallet and pay revenue once, on success', async () => {
+  await credit(20000);
+  let w = await wallets();
+  // Every successful payment so far paid 1.3% / 0.5% of its bouquet amount.
+  const { Transaction } = require('../src/models');
+  const ok = await Transaction.find({ type: 'cable', status: 'success' });
+  const base = ok.reduce((n, t) => n + t.amountKobo - t.feeKobo, 0);
+  assert.equal(w.revenue.earned, Math.round(ok.reduce((n, t) => n + Math.round((t.amountKobo - t.feeKobo) * 0.013), 0)) / 100);
+  assert.equal(w.superRevenue.total, ok.reduce((n, t) => n + Math.round((t.amountKobo - t.feeKobo) * 0.005), 0) / 100);
+  assert.equal(w.revenue.percent, 1.3);
+  assert.equal(w.superRevenue.percent, 0.5);
+  assert.ok(base > 0);
+
+  // Success: pool -4400, admin +57.20, super +22
+  let r = await pay(token, SMARTCARD_OK);
+  assert.equal(r.status, 200);
+  let w2 = await wallets();
+  assert.equal(w2.paypointWallet.balance, w.paypointWallet.balance - 4400);
+  assert.equal(Math.round((w2.revenue.balance - w.revenue.balance) * 100), 5720);
+  assert.equal(Math.round((w2.superRevenue.total - w.superRevenue.total) * 100), 2200);
+
+  // Failure: the hold comes back and no revenue is paid
+  w = w2;
+  r = await pay(token, SMARTCARD_FAIL);
+  assert.equal(r.status, 422);
+  w2 = await wallets();
+  assert.equal(w2.paypointWallet.balance, w.paypointWallet.balance);
+  assert.equal(w2.revenue.balance, w.revenue.balance);
+  assert.deepEqual(w2.ledger.slice(0, 2).map((e) => e.kind), ['refund', 'payment']);
+
+  // Pending: held, no revenue until it settles
+  fake.requeryResult = 'delivered';
+  r = await pay(token, SMARTCARD_PENDING);
+  assert.equal(r.body.data.transaction.status, 'pending');
+  w2 = await wallets();
+  assert.equal(w2.paypointWallet.balance, w.paypointWallet.balance - 4400);
+  assert.equal(w2.revenue.balance, w.revenue.balance);
+  const id = r.body.data.transaction.id;
+  await api('POST', `/api/cable/requery/${id}`, { token });
+  await api('POST', `/api/cable/requery/${id}`, { token });
+  const w3 = await wallets();
+  assert.equal(Math.round((w3.revenue.balance - w2.revenue.balance) * 100), 5720, 'revenue paid exactly once');
+});
+
+test('admin withdraws revenue to the Paypoint wallet or their own wallet', async () => {
+  const w = await wallets(adminToken);
+  assert.ok(w.revenue.balance > 30, JSON.stringify(w.revenue));
+  assert.equal(w.superRevenue, undefined, 'admins do not see super admin revenue');
+
+  let r = await api('POST', '/api/admin/revenue/withdraw', { token: adminToken, body: { amount: 20, to: 'pool' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.paypointWallet.balance, w.paypointWallet.balance + 20);
+  assert.equal(r.body.data.revenue.balance, Math.round((w.revenue.balance - 20) * 100) / 100);
+
+  const me = (await api('GET', '/api/auth/me', { token: adminToken })).body.data;
+  r = await api('POST', '/api/admin/revenue/withdraw', { token: adminToken, body: { amount: 10, to: 'main' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.balance, me.balance + 10);
+  assert.equal(r.body.data.transaction.channel, 'revenue');
+  assert.equal(r.body.data.revenue.withdrawn, 30);
+
+  r = await api('POST', '/api/admin/revenue/withdraw', { token: adminToken, body: { amount: 99999999, to: 'pool' } });
+  assert.equal(r.status, 400, 'cannot withdraw more than the balance');
+  r = await api('POST', '/api/admin/revenue/withdraw', { token: adminToken, body: { amount: 1, to: 'bank' } });
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/admin/revenue/withdraw', { token: superToken, body: { amount: 1, to: 'pool' } });
+  assert.equal(r.status, 403, 'super admin revenue is a record only');
+  r = await api('POST', '/api/admin/revenue/withdraw', { token, body: { amount: 1, to: 'main' } });
+  assert.equal(r.status, 403);
+});
+
+test('the super admin is hidden from the admin', async () => {
+  // Super admin buys something with their own wallet.
+  let r = await api('POST', '/api/admin/wallet/credit', { token: superToken, body: { email: SUPER_EMAIL, amount: 5000 } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  await api('PUT', '/api/auth/pin', { token: superToken, body: { pin: '1234' } });
+  r = await pay(superToken, SMARTCARD_OK);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const superTxId = r.body.data.transaction.id;
+  const superId = (await api('GET', '/api/auth/me', { token: superToken })).body.data.id;
+
+  // Admin sees none of it.
+  r = await api('GET', '/api/admin/users?q=alusine', { token: adminToken });
+  assert.deepEqual(r.body.data, []);
+  r = await api('GET', '/api/admin/users?limit=200', { token: adminToken });
+  assert.ok(!r.body.data.some((u) => u.email === SUPER_EMAIL));
+  r = await api('GET', `/api/admin/users/${superId}`, { token: adminToken });
+  assert.equal(r.status, 404);
+  r = await api('POST', '/api/admin/wallet/credit', { token: adminToken, body: { email: SUPER_EMAIL, amount: 1 } });
+  assert.equal(r.status, 404);
+  r = await api('POST', `/api/admin/users/${superId}/unlock-pin`, { token: adminToken });
+  assert.equal(r.status, 404);
+  r = await api('GET', '/api/admin/transactions?limit=200', { token: adminToken });
+  assert.ok(!r.body.data.some((t) => t.id === superTxId));
+  r = await api('POST', `/api/admin/transactions/${superTxId}/requery`, { token: adminToken });
+  assert.equal(r.status, 404);
+  const adminStats = (await api('GET', '/api/admin/stats', { token: adminToken })).body.data;
+  assert.equal(adminStats.isSuper, false);
+  assert.equal(adminStats.vtpass.balance, null, 'admins see the Paypoint wallet, not VTPass');
+  assert.equal(adminStats.superRevenue, undefined);
+  assert.ok(adminStats.paypointWallet.balance > 0);
+  const ledger = (await wallets(adminToken)).ledger;
+  assert.ok(ledger.every((e) => e.by === undefined && e.wallet !== 'superRevenue'));
+  assert.ok(ledger.filter((e) => e.kind === 'topup').every((e) => e.note === 'Paypoint wallet funded'));
+
+  // Super admin sees everything.
+  const superStats = (await api('GET', '/api/admin/stats', { token: superToken })).body.data;
+  assert.equal(superStats.isSuper, true);
+  assert.equal(superStats.users, adminStats.users + 1);
+  assert.equal(superStats.salesAll.count, adminStats.salesAll.count + 1);
+  assert.ok(superStats.superRevenue.total > 0);
+  r = await api('GET', '/api/admin/transactions?limit=200', { token: superToken });
+  assert.ok(r.body.data.some((t) => t.id === superTxId));
+  r = await api('GET', `/api/admin/users/${superId}`, { token: superToken });
+  assert.equal(r.status, 200);
+  r = await api('GET', '/api/admin/wallets?wallet=superRevenue', { token: superToken });
+  assert.ok(r.body.data.ledger.length > 0 && r.body.data.ledger.every((e) => e.wallet === 'superRevenue'));
 });
 
 test('admin routes need the key', async () => {
