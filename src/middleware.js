@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { config, isAdminEmail } = require('./config');
+const { config, isAdminEmail, isSuperAdminEmail } = require('./config');
 const { User } = require('./models');
 const { ApiError } = require('./utils');
 
@@ -30,8 +30,9 @@ async function requireAuth(req, res, next) {
 
 /**
  * Admin access, either:
- *  - logged in (Bearer token) with an email listed in ADMIN_EMAILS, or
+ *  - logged in (Bearer token) with an email in ADMIN_EMAILS or SUPER_ADMIN_EMAILS, or
  *  - header x-admin-key matching ADMIN_API_KEY (for scripts / curl).
+ * Sets req.isSuper for super admins (they see everything; admins don't see them).
  */
 async function requireAdmin(req, res, next) {
   const key = req.get('x-admin-key');
@@ -43,7 +44,18 @@ async function requireAdmin(req, res, next) {
   }
   return requireAuth(req, res, (err) => {
     if (err) return next(err);
-    if (!isAdminEmail(req.user.email)) return next(new ApiError(403, 'Admins only'));
+    req.isSuper = isSuperAdminEmail(req.user.email);
+    if (!req.isSuper && !isAdminEmail(req.user.email)) return next(new ApiError(403, 'Admins only'));
+    next();
+  });
+}
+
+/** Logged in as a super admin (no API key access). */
+function requireSuperAdmin(req, res, next) {
+  return requireAuth(req, res, (err) => {
+    if (err) return next(err);
+    if (!isSuperAdminEmail(req.user.email)) return next(new ApiError(403, 'Not allowed'));
+    req.isSuper = true;
     next();
   });
 }
@@ -70,4 +82,4 @@ function errorHandler(err, req, res, next) {
   res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
 }
 
-module.exports = { signToken, requireAuth, requireAdmin, notFound, errorHandler };
+module.exports = { signToken, requireAuth, requireAdmin, requireSuperAdmin, notFound, errorHandler };

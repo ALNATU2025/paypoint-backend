@@ -9,6 +9,7 @@ const cableRoutes = require('./routes/cable');
 const { router: walletRoutes } = require('./routes/wallet');
 const { transactions } = require('./routes/misc');
 const adminRoutes = require('./routes/admin');
+const superRoutes = require('./routes/super');
 
 function createApp() {
   const app = express();
@@ -33,6 +34,7 @@ function createApp() {
   app.use('/api/wallet', walletRoutes);
   app.use('/api/transactions', transactions);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/super', superRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

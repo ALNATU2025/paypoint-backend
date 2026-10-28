@@ -19,6 +19,8 @@ async function main() {
     console.error('[db] index sync failed:', e.message);
   }
 
+  await require('./services/platform').ensure();
+
   const app = createApp();
   const server = app.listen(config.port, () => {
     console.log(`[api] Paypoint API on port ${config.port} (VTPass ${config.vtpass.mode})`);

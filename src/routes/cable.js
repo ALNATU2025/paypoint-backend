@@ -1,10 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const mongoose = require('mongoose');
 const { config } = require('../config');
 const { Transaction, User } = require('../models');
 const { requireAuth } = require('../middleware');
 const vtpass = require('../services/vtpass');
 const wallet = require('../services/wallet');
+const platform = require('../services/platform');
 const { ApiError, ah, toKobo, vtpassRequestId, isPin, requireFields } = require('../utils');
 
 const router = express.Router();
@@ -129,24 +131,46 @@ router.post(
     const feeKobo = toKobo(config.serviceFeeNaira);
     const totalKobo = toKobo(amountNaira) + feeKobo;
 
-    await wallet.debit(req.user._id, totalKobo);
+    const description = `${s.name} ${packageName}`;
+    const poolKobo = toKobo(amountNaira);
+    const txId = new mongoose.Types.ObjectId();
 
-    let tx = await Transaction.create({
-      user: req.user._id,
-      type: 'cable',
-      status: 'pending',
-      amountKobo: totalKobo,
-      feeKobo,
-      description: `${s.name} ${packageName}`,
-      serviceID: s.serviceID,
-      billersCode,
-      customerName,
-      variationCode,
-      packageName,
-      months,
-      phone: req.user.phone,
-      requestId: vtpassRequestId(),
-    });
+    await wallet.debit(req.user._id, totalKobo);
+    // Every payment is also covered by the Paypoint wallet. When it can't
+    // cover it, nothing goes through, whatever the user's balance.
+    if (!(await platform.holdForPayment(poolKobo, txId, description))) {
+      await User.updateOne({ _id: req.user._id }, { $inc: { balanceKobo: totalKobo } });
+      throw new ApiError(503, 'Payments are temporarily unavailable. Please try again shortly.', {
+        code: 'SERVICE_UNAVAILABLE',
+      });
+    }
+
+    let tx;
+    try {
+      tx = await Transaction.create({
+        _id: txId,
+        poolKobo,
+        user: req.user._id,
+        type: 'cable',
+        status: 'pending',
+        amountKobo: totalKobo,
+        feeKobo,
+        description,
+        serviceID: s.serviceID,
+        billersCode,
+        customerName,
+        variationCode,
+        packageName,
+        months,
+        phone: req.user.phone,
+        requestId: vtpassRequestId(),
+      });
+    } catch (e) {
+      // Could not record it: put both balances back before failing.
+      await User.updateOne({ _id: req.user._id }, { $inc: { balanceKobo: totalKobo } });
+      await platform.releasePayment({ _id: txId, poolKobo, description });
+      throw e;
+    }
 
     let result;
     try {
