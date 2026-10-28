@@ -17,7 +17,13 @@ const config = {
   jwtSecret: read('JWT_SECRET'),
   jwtExpiresIn: read('JWT_EXPIRES_IN') || '30d',
 
-  // Optional key that unlocks /api/admin routes (manual wallet credit).
+  // Accounts with these emails get the admin dashboard (comma-separated).
+  adminEmails: (read('ADMIN_EMAILS') || 'payonpointng@gmail.com')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+
+  // Optional key for calling /api/admin routes from scripts (header x-admin-key).
   adminApiKey: read('ADMIN_API_KEY'),
 
   // Flat fee added to each cable payment, in naira. 0 = no fee.
@@ -37,6 +43,9 @@ const config = {
 };
 
 config.isProduction = config.env === 'production';
+
+/** True when this email belongs to an admin. */
+const isAdminEmail = (email) => Boolean(email) && config.adminEmails.includes(String(email).toLowerCase());
 
 // Required. VTPASS_PUBLIC_KEY is optional: without it, GET requests are
 // signed with the secret key instead.
@@ -75,4 +84,4 @@ function configWarnings() {
   return warnings;
 }
 
-module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, missingVtpassVars };
+module.exports = { config, fatalConfigErrors, configWarnings, vtpassConfigured, missingVtpassVars, isAdminEmail };

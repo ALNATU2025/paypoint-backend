@@ -45,7 +45,16 @@ Send `Authorization: Bearer <token>` on every route except register, login and h
 | GET | `/api/wallet` | | `{ balance }` |
 | GET | `/api/transactions` | `?type=cable\|funding&limit=` | Newest first |
 | GET | `/api/transactions/:id` | | |
-| POST | `/api/admin/wallet/credit` | `email` (or `phone`), `amount`, `note?` | Header `x-admin-key`. Only active when `ADMIN_API_KEY` is set |
+| GET | `/api/admin/stats` | | **Admin.** Users, sales today and in total, pending payments, wallet totals, VTPass balance |
+| GET | `/api/admin/users` | `?q=` | **Admin.** Search users by name, email or phone |
+| GET | `/api/admin/users/:id` | | **Admin.** User and recent transactions |
+| POST | `/api/admin/users/:id/unlock-pin` | | **Admin.** Clear a PIN lockout |
+| POST | `/api/admin/wallet/credit` | `userId` / `email` / `phone`, `amount`, `note?` | **Admin.** Add money to a wallet |
+| POST | `/api/admin/wallet/debit` | `userId` / `email` / `phone`, `amount`, `note?` | **Admin.** Correct a wallet (never goes below ₦0) |
+| GET | `/api/admin/transactions` | `?status=&type=` | **Admin.** All users' transactions |
+| POST | `/api/admin/transactions/:id/requery` | | **Admin.** Settle any pending payment |
+
+**Admin access.** Log in with an email listed in `ADMIN_EMAILS` (default `payonpointng@gmail.com`; separate several with commas), and the app shows the Admin dashboard. Scripts can use the header `x-admin-key: <ADMIN_API_KEY>` instead.
 
 - **`months`** (1–12) applies to DStv and GOtv. StarTimes is always 1 month.
 - **Change vs renew** follows the VTPass TV docs:

@@ -7,7 +7,8 @@ const { notFound, errorHandler } = require('./middleware');
 const authRoutes = require('./routes/auth');
 const cableRoutes = require('./routes/cable');
 const { router: walletRoutes } = require('./routes/wallet');
-const { transactions, admin } = require('./routes/misc');
+const { transactions } = require('./routes/misc');
+const adminRoutes = require('./routes/admin');
 
 function createApp() {
   const app = express();
@@ -31,7 +32,7 @@ function createApp() {
   app.use('/api/cable', cableRoutes);
   app.use('/api/wallet', walletRoutes);
   app.use('/api/transactions', transactions);
-  app.use('/api/admin', admin);
+  app.use('/api/admin', adminRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
