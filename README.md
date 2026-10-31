@@ -41,6 +41,8 @@ Send `Authorization: Bearer <token>` on every route except register, login and h
 | GET | `/api/cable/:serviceID/packages` | | `[{ code, name, amount }]` from VTPass |
 | POST | `/api/cable/verify` | `serviceID, billersCode` | `customerName, currentBouquet, dueDate, renewalAmount…` |
 | POST | `/api/cable/pay` | **Change:** `serviceID, billersCode, variationCode, months?, pin`<br>**Renew:** `serviceID, billersCode, mode: "renew", pin` | Returns `{ transaction, balance }`. Status is `success`, `pending` or `failed` (failed is refunded) |
+| | | **Any amount (DStv):** `serviceID, billersCode, mode: "amount", amount, pin` (₦100–₦500,000) | Sent to VTPass as a renew with exactly that amount |
+| | | **Extra View (DStv):** add `extraView: true` to any of the above | Paid as a second payment of exactly the admin's Extra View price |
 | POST | `/api/cable/requery/:id` | | Updates a pending payment |
 | GET | `/api/wallet` | | `{ balance }` |
 | GET | `/api/transactions` | `?type=cable\|funding&limit=` | Newest first |
@@ -53,6 +55,7 @@ Send `Authorization: Bearer <token>` on every route except register, login and h
 | POST | `/api/admin/wallet/debit` | `userId` / `email` / `phone`, `amount`, `note?` | **Admin.** Correct a wallet (never goes below ₦0) |
 | GET | `/api/admin/transactions` | `?status=&type=` | **Admin.** All users' transactions |
 | POST | `/api/admin/transactions/:id/requery` | | **Admin.** Settle any pending payment |
+| GET / PUT | `/api/admin/settings` | `extraViewAmount` | **Admin.** DStv Extra View price (VTPass Extra View bundles are hidden) |
 | GET | `/api/admin/wallets` | `?wallet=pool\|adminRevenue&limit=` | **Admin.** Paypoint wallet, Revenue wallet and their history |
 | POST | `/api/admin/revenue/withdraw` | `amount, to: "pool" \| "main"` | **Admin.** Move revenue into the Paypoint wallet or the admin's own app wallet |
 | POST | `/api/super/pool/credit` | `amount, note?` | **Super admin.** Fund the Paypoint wallet |

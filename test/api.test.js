@@ -15,7 +15,7 @@ const SMARTCARD_PENDING = '2222222222';
 const SMARTCARD_INVALID = '9999999999';
 const SMARTCARD_WRONG_STARTIMES = '8888888888';
 
-const fake = { pays: [], requeryResult: 'delivered' };
+const fake = { pays: [], requeryResult: 'delivered', failAmount: null };
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -29,6 +29,9 @@ const variations = {
   dstv: [
     { variation_code: 'dstv-padi', name: 'DStv Padi N4,400', variation_amount: '4400.00', fixedPrice: 'Yes' },
     { variation_code: 'dstv-compact', name: 'DStv Compact N19,000', variation_amount: '19000.00', fixedPrice: 'Yes' },
+    // Extra View bundles are hidden from the app.
+    { variation_code: 'dstv-compact-extra', name: 'DStv Compact + Extra View N25,000', variation_amount: '25000.00', fixedPrice: 'Yes' },
+    { variation_code: 'dstv-xtraview', name: 'XtraView Access', variation_amount: '6000.00', fixedPrice: 'Yes' },
   ],
   gotv: [{ variation_code: 'gotv-max', name: 'GOtv Max N8,500', variation_amount: '8500.00', fixedPrice: 'Yes' }],
   startimes: [{ variation_code: 'classic', name: 'Classic - 5300 Naira', variation_amount: '5300.00', fixedPrice: 'Yes' }],
@@ -93,6 +96,9 @@ const fakeServer = http.createServer(async (req, res) => {
     if (path === '/pay') {
       fake.pays.push(body);
       assert.match(body.request_id, /^\d{12}/, 'request_id starts with YYYYMMDDHHmm');
+      if (fake.failAmount !== null && body.amount === fake.failAmount) {
+        return send({ code: '016', response_description: 'TRANSACTION FAILED' });
+      }
       if (body.billersCode === SMARTCARD_FAIL) return send({ code: '016', response_description: 'TRANSACTION FAILED' });
       if (body.billersCode === SMARTCARD_PENDING) {
         return send({ code: '099', response_description: 'TRANSACTION IS PROCESSING', content: { transactions: { status: 'pending' } } });
@@ -745,6 +751,123 @@ test('the super admin is hidden from the admin', async () => {
   assert.equal(r.status, 200);
   r = await api('GET', '/api/admin/wallets?wallet=superRevenue', { token: superToken });
   assert.ok(r.body.data.ledger.length > 0 && r.body.data.ledger.every((e) => e.wallet === 'superRevenue'));
+});
+
+test('DStv packages: Extra View bundles hidden, custom amount and Extra View offered', async () => {
+  let r = await api('GET', '/api/cable/dstv/packages', { token });
+  assert.ok(!r.body.data.some((p) => /view/i.test(p.name)), JSON.stringify(r.body.data));
+  assert.deepEqual(r.body.customAmount, { min: 100, max: 500000 });
+  assert.equal(r.body.extraView.amount, 6000);
+  r = await api('GET', '/api/cable/gotv/packages', { token });
+  assert.equal(r.body.customAmount, null);
+  assert.equal(r.body.extraView, null);
+});
+
+test('admin sets the Extra View price', async () => {
+  let r = await api('PUT', '/api/admin/settings', { token, body: { extraViewAmount: 6500 } });
+  assert.equal(r.status, 403);
+  r = await api('PUT', '/api/admin/settings', { token: adminToken, body: { extraViewAmount: 5 } });
+  assert.equal(r.status, 400);
+  r = await api('PUT', '/api/admin/settings', { token: adminToken, body: { extraViewAmount: 6500 } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.extraViewAmount, 6500);
+  r = await api('GET', '/api/admin/stats', { token: adminToken });
+  assert.equal(r.body.data.settings.extraViewAmount, 6500);
+  r = await api('GET', '/api/cable/dstv/packages', { token });
+  assert.equal(r.body.extraView.amount, 6500);
+});
+
+async function balanceOf(t) {
+  return (await api('GET', '/api/auth/me', { token: t })).body.data.balance;
+}
+
+test('DStv: pay any amount', async () => {
+  await credit(30000);
+  const before = await balanceOf(token);
+  let r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, mode: 'amount', amount: 50, pin: '1234' },
+  });
+  assert.equal(r.status, 400, 'below the minimum');
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'gotv', billersCode: SMARTCARD_OK, mode: 'amount', amount: 2500, pin: '1234' },
+  });
+  assert.equal(r.status, 400, 'DStv only');
+
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, mode: 'amount', amount: 2500.5, pin: '1234' },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.transaction.amount, 2500.5);
+  assert.equal(r.body.data.transaction.packageName, 'Custom amount');
+  assert.equal(r.body.data.balance, before - 2500.5);
+  const sent = fake.pays.at(-1);
+  assert.equal(sent.subscription_type, 'renew');
+  assert.equal(sent.amount, 2500.5, 'exactly the amount the user chose');
+  assert.equal(sent.variation_code, undefined);
+});
+
+test('DStv Extra View is a second payment of exactly its price', async () => {
+  let before = await balanceOf(token);
+  const pays = fake.pays.length;
+  let r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, variationCode: 'dstv-padi', extraView: true, pin: '1234' },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(fake.pays.length, pays + 2);
+  assert.equal(fake.pays.at(-2).variation_code, 'dstv-padi');
+  assert.equal(fake.pays.at(-1).amount, 6500);
+  assert.equal(fake.pays.at(-1).subscription_type, 'renew');
+  assert.equal(r.body.data.extraViewTransaction.amount, 6500);
+  assert.equal(r.body.data.extraViewTransaction.packageName, 'Extra View');
+  assert.equal(r.body.data.extraViewTransaction.status, 'success');
+  assert.equal(r.body.data.balance, before - 4400 - 6500);
+  assert.match(r.body.message, /Extra View paid/);
+
+  // Renew + Extra View
+  before = r.body.data.balance;
+  await credit(20000);
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, mode: 'renew', extraView: true, pin: '1234' },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.balance, before + 20000 - 19000 - 6500);
+
+  // Extra View fails at VTPass: only it is refunded.
+  before = r.body.data.balance;
+  fake.failAmount = 6500;
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, variationCode: 'dstv-padi', extraView: true, pin: '1234' },
+  });
+  fake.failAmount = null;
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.transaction.status, 'success');
+  assert.equal(r.body.data.extraViewTransaction.status, 'failed');
+  assert.equal(r.body.data.balance, before - 4400);
+  assert.match(r.body.message, /Extra View could not be paid/);
+
+  // Not enough for both: nothing is charged.
+  const { User } = require('../src/models');
+  await User.updateOne({ email: EMAIL }, { balanceKobo: 500000 }); // ₦5,000: covers Padi, not Padi + Extra View
+  const n = fake.pays.length;
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'dstv', billersCode: SMARTCARD_OK, variationCode: 'dstv-padi', extraView: true, pin: '1234' },
+  });
+  assert.equal(r.status, 402);
+  assert.equal(fake.pays.length, n);
+  assert.equal(await balanceOf(token), 5000);
+
+  r = await api('POST', '/api/cable/pay', {
+    token,
+    body: { serviceID: 'startimes', billersCode: SMARTCARD_OK, variationCode: 'classic', extraView: true, pin: '1234' },
+  });
+  assert.equal(r.status, 400, 'Extra View is DStv only');
 });
 
 test('admin routes need the key', async () => {

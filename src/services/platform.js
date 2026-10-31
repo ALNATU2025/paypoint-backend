@@ -47,6 +47,34 @@ async function move(wallet, deltaKobo, { kind, transaction = null, by = null, no
 }
 
 // ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/** Current DStv Extra View price in naira. */
+async function extraViewNaira() {
+  const p = await get();
+  return p.extraViewKobo == null ? config.extraViewNaira : toNaira(p.extraViewKobo);
+}
+
+async function setExtraViewNaira(naira) {
+  const n = Number(naira);
+  if (!Number.isFinite(n) || n < 100 || n > 200000) throw new ApiError(400, 'Enter an Extra View price between ₦100 and ₦200,000');
+  await ensure();
+  await Platform.updateOne({ _id: KEY }, { extraViewKobo: Math.round(n * 100) });
+  return extraViewNaira();
+}
+
+async function settings() {
+  return { extraViewAmount: await extraViewNaira() };
+}
+
+/** True when the Paypoint wallet can cover this many kobo right now. */
+async function canCover(kobo) {
+  const p = await get();
+  return p.poolKobo >= kobo;
+}
+
+// ---------------------------------------------------------------------------
 // Cable payments
 // ---------------------------------------------------------------------------
 
@@ -200,6 +228,10 @@ async function ledger({ isSuper, wallet, limit = 50 }) {
 }
 
 module.exports = {
+  extraViewNaira,
+  setExtraViewNaira,
+  settings,
+  canCover,
   ensure,
   get,
   holdForPayment,

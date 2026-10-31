@@ -132,6 +132,7 @@ router.get(
         byProvider: Object.fromEntries(byProvider.map((p) => [p._id, { amount: toNaira(p.amount), count: p.count }])),
         vtpass: { mode: config.vtpass.mode, configured: vtpassConfigured(), balance: vtpassBalance },
         ...platform.summary(p, { isSuper: Boolean(req.isSuper) }),
+        settings: await platform.settings(),
         isSuper: Boolean(req.isSuper),
         serverTime: new Date().toISOString(),
       },
@@ -269,6 +270,26 @@ router.post(
     if (tx.status === 'pending') tx = await wallet.settleCable(tx, await vtpass.requery(tx.requestId));
     const [row] = await withOwners([tx]);
     res.json({ success: true, data: row });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Settings (DStv Extra View price)
+// ---------------------------------------------------------------------------
+
+// GET /api/admin/settings
+router.get(
+  '/settings',
+  ah(async (req, res) => res.json({ success: true, data: await platform.settings() })),
+);
+
+// PUT /api/admin/settings { extraViewAmount }
+router.put(
+  '/settings',
+  ah(async (req, res) => {
+    const body = req.body || {};
+    if (body.extraViewAmount !== undefined) await platform.setExtraViewNaira(body.extraViewAmount);
+    res.json({ success: true, message: 'Settings saved', data: await platform.settings() });
   }),
 );
 

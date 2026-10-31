@@ -8,12 +8,16 @@ const { config, vtpassConfigured } = require('../config');
 const { ApiError } = require('../utils');
 
 const CABLE_SERVICES = {
-  dstv: { serviceID: 'dstv', name: 'DStv', supportsMonths: true },
+  // customAmount: pay any amount; extraView: Extra View add-on (handled by Paypoint).
+  dstv: { serviceID: 'dstv', name: 'DStv', supportsMonths: true, customAmount: true, extraView: true },
   gotv: { serviceID: 'gotv', name: 'GOtv', supportsMonths: true },
   startimes: { serviceID: 'startimes', name: 'StarTimes', supportsMonths: false },
 };
 
 class VtpassNetworkError extends Error {}
+
+/** Matches "Extra View", "ExtraView", "XtraView", "extra-view"… in names and codes. */
+const EXTRA_VIEW_RE = /e?xtra[\s_-]*view/i;
 
 function authHeaders(method) {
   const v = config.vtpass;
@@ -106,6 +110,9 @@ async function getVariations(serviceID, { fresh = false } = {}) {
       fixedPrice: String(x.fixedPrice || 'Yes').toLowerCase() === 'yes',
     }))
     .filter((x) => x.code && Number.isFinite(x.amount) && x.amount > 0)
+    // Extra View bundles from VTPass are hidden; Paypoint adds Extra View itself
+    // at the admin's price.
+    .filter((x) => !EXTRA_VIEW_RE.test(x.name) && !EXTRA_VIEW_RE.test(x.code))
     .sort((a, b) => a.amount - b.amount);
   cache.set(serviceID, { at: Date.now(), data });
   return data;
@@ -260,4 +267,5 @@ module.exports = {
   authHeaders,
   parseDueDate,
   getBalance,
+  EXTRA_VIEW_RE,
 };

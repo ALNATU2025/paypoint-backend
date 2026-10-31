@@ -119,6 +119,8 @@ const platformSchema = new mongoose.Schema(
     adminEarnedKobo: { type: Number, default: 0 },
     adminWithdrawnKobo: { type: Number, default: 0 },
     superRevenueKobo: { type: Number, default: 0 },
+    // DStv Extra View price set by the admin; null = EXTRA_VIEW_NAIRA default.
+    extraViewKobo: { type: Number, default: null },
   },
   { timestamps: true },
 );
