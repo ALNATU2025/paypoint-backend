@@ -39,6 +39,9 @@ const config = {
   adminRevenuePercent: percent(read('ADMIN_REVENUE_PERCENT'), 1.3),
   superAdminRevenuePercent: percent(read('SUPER_ADMIN_REVENUE_PERCENT'), 0.5),
 
+  // Default DStv Extra View price (naira) until the admin sets one in the dashboard.
+  extraViewNaira: Math.max(0, Number(read('EXTRA_VIEW_NAIRA')) || 6000),
+
   // Optional key for calling /api/admin routes from scripts (header x-admin-key).
   adminApiKey: read('ADMIN_API_KEY'),
 
