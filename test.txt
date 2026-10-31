@@ -1,0 +1,218 @@
+
+> paypoint-backend@1.0.0 test
+> node --test --test-concurrency=1 "test/**/*.test.js"
+
+TAP version 13
+# Subtest: health reports configuration
+ok 1 - health reports configuration
+  ---
+  duration_ms: 107.917701
+  type: 'test'
+  ...
+# Subtest: register validates and creates an account
+ok 2 - register validates and creates an account
+  ---
+  duration_ms: 131.487422
+  type: 'test'
+  ...
+# Subtest: phone numbers: any country, any length, and may be shared
+ok 3 - phone numbers: any country, any length, and may be shared
+  ---
+  duration_ms: 317.844564
+  type: 'test'
+  ...
+# Subtest: login with email and password
+ok 4 - login with email and password
+  ---
+  duration_ms: 128.848983
+  type: 'test'
+  ...
+# Subtest: older phone-only accounts can still log in with their phone
+ok 5 - older phone-only accounts can still log in with their phone
+  ---
+  duration_ms: 116.995908
+  type: 'test'
+  ...
+# Subtest: packages come from VTPass (both spellings) and are sorted
+ok 6 - packages come from VTPass (both spellings) and are sorted
+  ---
+  duration_ms: 18.076568
+  type: 'test'
+  ...
+# Subtest: verify smartcard
+ok 7 - verify smartcard
+  ---
+  duration_ms: 17.454949
+  type: 'test'
+  ...
+# Subtest: pay requires a PIN to be set
+ok 8 - pay requires a PIN to be set
+  ---
+  duration_ms: 3.707157
+  type: 'test'
+  ...
+# Subtest: set and change PIN
+ok 9 - set and change PIN
+  ---
+  duration_ms: 122.91248
+  type: 'test'
+  ...
+# Subtest: an empty Paypoint wallet blocks payments even when the user has money
+ok 10 - an empty Paypoint wallet blocks payments even when the user has money
+  ---
+  duration_ms: 81.383272
+  type: 'test'
+  ...
+# Subtest: super admin funds the Paypoint wallet
+ok 11 - super admin funds the Paypoint wallet
+  ---
+  duration_ms: 118.906021
+  type: 'test'
+  ...
+# Subtest: insufficient balance is rejected without calling VTPass
+ok 12 - insufficient balance is rejected without calling VTPass
+  ---
+  duration_ms: 60.24928
+  type: 'test'
+  ...
+# Subtest: successful payment debits the wallet with the VTPass price
+ok 13 - successful payment debits the wallet with the VTPass price
+  ---
+  duration_ms: 90.093156
+  type: 'test'
+  ...
+# Subtest: StarTimes ignores months and sends no subscription_type
+ok 14 - StarTimes ignores months and sends no subscription_type
+  ---
+  duration_ms: 79.271443
+  type: 'test'
+  ...
+# Subtest: failed payment is refunded
+ok 15 - failed payment is refunded
+  ---
+  duration_ms: 76.687415
+  type: 'test'
+  ...
+# Subtest: pending payment holds funds, then requery settles it
+ok 16 - pending payment holds funds, then requery settles it
+  ---
+  duration_ms: 104.214216
+  type: 'test'
+  ...
+# Subtest: pending payment that fails on requery is refunded exactly once
+ok 17 - pending payment that fails on requery is refunded exactly once
+  ---
+  duration_ms: 163.197877
+  type: 'test'
+  ...
+# Subtest: wrong PIN locks after 5 attempts
+ok 18 - wrong PIN locks after 5 attempts
+  ---
+  duration_ms: 308.63904
+  type: 'test'
+  ...
+# Subtest: renew uses the Renewal_Amount from VTPass, not a package
+ok 19 - renew uses the Renewal_Amount from VTPass, not a package
+  ---
+  duration_ms: 81.905909
+  type: 'test'
+  ...
+# Subtest: transactions list is scoped to the user
+ok 20 - transactions list is scoped to the user
+  ---
+  duration_ms: 78.137443
+  type: 'test'
+  ...
+# Subtest: admin credit by email; phone only when unambiguous
+ok 21 - admin credit by email; phone only when unambiguous
+  ---
+  duration_ms: 6.804931
+  type: 'test'
+  ...
+# Subtest: admin dashboard: payonpointng@gmail.com is admin, others are not
+ok 22 - admin dashboard: payonpointng@gmail.com is admin, others are not
+  ---
+  duration_ms: 206.737416
+  type: 'test'
+  ...
+# Subtest: payments use the Paypoint wallet and pay revenue once, on success
+ok 23 - payments use the Paypoint wallet and pay revenue once, on success
+  ---
+  duration_ms: 268.955483
+  type: 'test'
+  ...
+# Subtest: admin withdraws revenue to the Paypoint wallet or their own wallet
+ok 24 - admin withdraws revenue to the Paypoint wallet or their own wallet
+  ---
+  duration_ms: 34.41556
+  type: 'test'
+  ...
+# Subtest: the super admin is hidden from the admin
+ok 25 - the super admin is hidden from the admin
+  ---
+  duration_ms: 206.127703
+  type: 'test'
+  ...
+# Subtest: DStv packages: Extra View bundles hidden, custom amount and Extra View offered
+ok 26 - DStv packages: Extra View bundles hidden, custom amount and Extra View offered
+  ---
+  duration_ms: 7.343857
+  type: 'test'
+  ...
+# Subtest: admin sets the Extra View price
+ok 27 - admin sets the Extra View price
+  ---
+  duration_ms: 28.085175
+  type: 'test'
+  ...
+# Subtest: DStv: pay any amount
+ok 28 - DStv: pay any amount
+  ---
+  duration_ms: 82.133628
+  type: 'test'
+  ...
+# Subtest: DStv Extra View is a second payment of exactly its price
+ok 29 - DStv Extra View is a second payment of exactly its price
+  ---
+  duration_ms: 334.570559
+  type: 'test'
+  ...
+# Subtest: admin routes need the key
+ok 30 - admin routes need the key
+  ---
+  duration_ms: 1.333107
+  type: 'test'
+  ...
+# Subtest: request ids start with Lagos time
+ok 31 - request ids start with Lagos time
+  ---
+  duration_ms: 0.532325
+  type: 'test'
+  ...
+# Subtest: VTPass auth: public key is optional
+ok 32 - VTPass auth: public key is optional
+  ---
+  duration_ms: 3.843683
+  type: 'test'
+  ...
+# Subtest: health lists missing VTPass variables by name only
+ok 33 - health lists missing VTPass variables by name only
+  ---
+  duration_ms: 2.808107
+  type: 'test'
+  ...
+# Subtest: config trims whitespace and quotes pasted into env vars
+ok 34 - config trims whitespace and quotes pasted into env vars
+  ---
+  duration_ms: 25.519194
+  type: 'test'
+  ...
+1..34
+# tests 34
+# suites 0
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3613.426097

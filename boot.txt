@@ -1,0 +1,4 @@
+[config] Cable TV is disabled: missing VTPASS_API_KEY, VTPASS_SECRET_KEY.
+[db] connected
+[api] Paypoint API on port 4555 (VTPass live)
+{"ok":true,"db":"connected","vtpass":{"mode":"live","configured":false,"missing":["VTPASS_API_KEY","VTPASS_SECRET_KEY"]},"time":"2026-10-31T10:29:56.457Z"}
